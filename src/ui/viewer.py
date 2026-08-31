@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QColor, QPainter, QPixmap
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QPushButton, QWidget
 
 
 class ViewerOverlay(QWidget):
@@ -25,15 +25,39 @@ class ViewerOverlay(QWidget):
         self._drag_pos = None
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
+        self._user_zoomed = False
+        # 可见的操作按钮：上一张 / 下一张 / 退出
+        self._btn_prev = QPushButton("‹", self)
+        self._btn_next = QPushButton("›", self)
+        self._btn_close = QPushButton("✕", self)
+        self._btn_prev.setToolTip("上一张 (←)")
+        self._btn_next.setToolTip("下一张 (→)")
+        self._btn_close.setToolTip("退出 (Esc)")
+        for b in (self._btn_prev, self._btn_next, self._btn_close):
+            b.setFixedSize(40, 40)
+        self._btn_prev.clicked.connect(lambda: self.show_index(self._index - 1))
+        self._btn_next.clicked.connect(lambda: self.show_index(self._index + 1))
+        self._btn_close.clicked.connect(self.hide)
         self.hide()
 
     # ---------------- 生命周期 ----------------
     def open_at(self, index: int) -> None:
         self.setGeometry(self.parentWidget().rect())
+        self._place_buttons()
         self.show()
         self.raise_()
         self.setFocus()
         self.show_index(index)
+
+    def _place_buttons(self) -> None:
+        w = self.width()
+        self._btn_close.move(w - 52, 12)
+        self._btn_next.move(w - 96, 12)
+        self._btn_prev.move(w - 140, 12)
+
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        self._place_buttons()
 
     def show_index(self, index: int) -> None:
         items = self.controller.view_items
@@ -42,7 +66,9 @@ class ViewerOverlay(QWidget):
         self._index = max(0, min(index, len(items) - 1))
         item = items[self._index]
         self._pix = self.controller.fast_pixmap(item)   # 先 512 档缓存
-        self._scale = self._fit_scale()
+        self._user_zoomed = False
+        # 适应窗口但不放大超过 100%，避免小缓存图导致原图被拉得过大
+        self._scale = min(self._fit_scale(), 1.0)
         self._offset = QPointF(0, 0)
         self.controller.request_decode(item, self._on_decoded)
         for d in (-1, 1):                                # 预加载前后各 1 张
@@ -63,6 +89,10 @@ class ViewerOverlay(QWidget):
         cur = self.controller.view_items[self._index]
         if str(cur.path) == path_str:
             self._pix = QPixmap.fromImage(qimg)
+            if not self._user_zoomed:
+                # 原图到达后按原图重新适应（仍不超 100%）
+                self._scale = min(self._fit_scale(), 1.0)
+                self._offset = QPointF(0, 0)
             self.update()
 
     # ---------------- 绘制 ----------------
@@ -97,6 +127,7 @@ class ViewerOverlay(QWidget):
         world = (mouse - center - self._offset) / self._scale   # 锚定鼠标位置
         self._offset = mouse - center - world * new_scale
         self._scale = new_scale
+        self._user_zoomed = True
         self.update()
 
     def mousePressEvent(self, e) -> None:
@@ -124,6 +155,7 @@ class ViewerOverlay(QWidget):
         else:
             self._scale = 1.0
         self._offset = QPointF(0, 0)
+        self._user_zoomed = True
         self.update()
 
     def keyPressEvent(self, e) -> None:

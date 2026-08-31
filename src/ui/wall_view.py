@@ -74,6 +74,7 @@ class WallView(QAbstractScrollArea):
         sb = self.verticalScrollBar()
         sb.setRange(0, max(0, y - self.viewport().height()))
         sb.setPageStep(max(1, self.viewport().height()))
+        sb.setSingleStep(120)
         self._debounce.start()
 
     def resizeEvent(self, e) -> None:
@@ -110,6 +111,14 @@ class WallView(QAbstractScrollArea):
         self.visible_range_changed.emit(first, last)
 
     # ---------------- 交互 ----------------
+    def wheelEvent(self, e) -> None:
+        # 图片墙加速滚动：每格滚轮至少滚动一行高度
+        step = max(120, self.row_height)
+        dy = e.angleDelta().y()
+        sb = self.verticalScrollBar()
+        sb.setValue(sb.value() - int(dy / 120 * step))
+        e.accept()
+
     def mousePressEvent(self, e) -> None:
         if e.button() == Qt.MouseButton.LeftButton:
             idx = self.index_at(e.position())
