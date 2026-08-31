@@ -1,0 +1,94 @@
+/* 千寻图片查看器 - 暗色主题 */
+QWidget {
+    background-color: #202124;
+    color: #e8eaed;
+    font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+    font-size: 13px;
+}
+QToolBar {
+    background: #292a2d;
+    border: none;
+    spacing: 6px;
+    padding: 5px 8px;
+}
+QPushButton {
+    background: #3a3b3e;
+    border: 1px solid #4a4b4e;
+    border-radius: 4px;
+    padding: 4px 12px;
+}
+QPushButton:hover { background: #4a4b4e; }
+QPushButton:pressed { background: #55565a; }
+QPushButton:checked {
+    background: #0b57d0;
+    border-color: #0b57d0;
+    color: #ffffff;
+}
+QPushButton:disabled { color: #77797d; background: #2c2d30; }
+QComboBox, QLineEdit, QSpinBox {
+    background: #3a3b3e;
+    border: 1px solid #4a4b4e;
+    border-radius: 4px;
+    padding: 3px 8px;
+    min-height: 20px;
+}
+QComboBox QAbstractItemView {
+    background: #2c2d30;
+    selection-background-color: #0b57d0;
+    border: 1px solid #4a4b4e;
+}
+QComboBox::drop-down { border: none; width: 18px; }
+QSlider::groove:horizontal {
+    height: 4px;
+    background: #4a4b4e;
+    border-radius: 2px;
+}
+QSlider::handle:horizontal {
+    width: 12px;
+    margin: -5px 0;
+    border-radius: 7px;
+    background: #8ab4f8;
+}
+QSlider::sub-page:horizontal { background: #8ab4f8; border-radius: 2px; }
+QCheckBox::indicator {
+    width: 14px;
+    height: 14px;
+    border: 1px solid #4a4b4e;
+    border-radius: 3px;
+    background: #3a3b3e;
+}
+QCheckBox::indicator:checked { background: #0b57d0; border-color: #0b57d0; }
+QStatusBar { background: #292a2d; color: #c7cbd4; }
+QListView { background: #202124; border: none; outline: none; }
+QScrollBar:vertical {
+    background: #202124;
+    width: 10px;
+}
+QScrollBar::handle:vertical {
+    background: #4a4b4e;
+    border-radius: 5px;
+    min-height: 30px;
+}
+QScrollBar::handle:vertical:hover { background: #5f6165; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar:horizontal { background: #202124; height: 10px; }
+QScrollBar::handle:horizontal {
+    background: #4a4b4e;
+    border-radius: 5px;
+    min-width: 30px;
+}
+QMenu {
+    background: #2c2d30;
+    border: 1px solid #4a4b4e;
+    padding: 4px;
+}
+QMenu::item { padding: 5px 24px; border-radius: 3px; }
+QMenu::item:selected { background: #0b57d0; }
+QDialog, QScrollArea { background: #202124; }
+QLabel { background: transparent; }
+QToolTip {
+    background: #2c2d30;
+    color: #e8eaed;
+    border: 1px solid #4a4b4e;
+    padding: 3px;
+}
