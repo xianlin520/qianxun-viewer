@@ -66,12 +66,17 @@ class WallView(QAbstractScrollArea):
                     break
                 j += 1
             j = min(j, n - 1)
+            last_row = (j == n - 1)
             row_h = max(1, int(vp_w / ar_sum))
+            if last_row:
+                # 末行不拉伸铺满：按目标行高自然宽度左对齐，
+                # 避免单张图被拉成巨型模糊块
+                row_h = min(row_h, self.row_height)
             x = 0
             for k in range(i, j + 1):
                 w = int(round(row_h * self._aspect(self._items[k])))
-                if k == j:
-                    w = vp_w - x          # 末格取余宽，保证行内无缝
+                if not last_row and k == j:
+                    w = vp_w - x          # 行内无缝：末格取余宽
                 cells[k] = QRect(x, y, w, row_h)
                 x += w
             y += row_h

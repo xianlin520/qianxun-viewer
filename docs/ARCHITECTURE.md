@@ -66,7 +66,7 @@
 
 ## 7. 视图布局
 
-- **WallView（图片墙）**：`QAbstractScrollArea` 自绘。justified 算法：按宽高比贪心累加，`行高 = 视口宽 / Σ宽高比`，达到目标行高即断行；行末格取余宽，图片以 cover 裁切填充，实现行间/行内无缝。滚动范围由总布局高度决定；可见范围反推用于缩略图调度。
+- **WallView（图片墙）**：`QAbstractScrollArea` 自绘。justified 算法：按宽高比贪心累加，`行高 = 视口宽 / Σ宽高比`，达到目标行高即断行；行末格取余宽保证行内无缝；**末行不拉伸**（行高封顶目标值、自然宽度左对齐），避免单张图巨型化。滚轮经 viewport 事件过滤器加速；滚动范围由总布局高度决定；可见范围反推用于缩略图调度。
 - **GridView（分页）**：`QListView(IconMode)` + 自定义 Delegate 绘制卡片（图 + 信息行 + 按钮行 + 角标）。按钮命中：`mousePressEvent` 中对 `delegate.button_rects(visualRect)` 做矩形命中，命中则发 `card_action` 而非选择。
 - 分页容量：`每页 = 列数 × 行数`，由视口与 `sizeHint` 实时计算；窗体变化自动重算并夹取页码。
 
