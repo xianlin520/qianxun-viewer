@@ -46,8 +46,17 @@ def main() -> int:
     if qss.exists():
         app.setStyleSheet(qss.read_text("utf-8"))
     win = MainWindow()
-    server.newConnection.connect(lambda: (win.showNormal(), win.raise_(),
-                                          win.activateWindow()))
+
+    def _activate() -> None:
+        conn = server.nextPendingConnection()
+        if conn is not None:
+            conn.waitForReadyRead(200)
+            conn.disconnectFromServer()
+        win.showNormal()
+        win.raise_()
+        win.activateWindow()
+
+    server.newConnection.connect(_activate)
     app._qx_single_server = server  # 保持引用
     win.show()
     return app.exec()

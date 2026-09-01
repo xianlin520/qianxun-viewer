@@ -28,15 +28,18 @@ class ScanSignals(QObject):
 
 
 class ScanWorker(QRunnable):
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, is_cancelled=None):
         super().__init__()
         self.root = root
+        self.is_cancelled = is_cancelled
         self.signals = ScanSignals()
 
     def run(self):
         try:
             total = errors = 0
             for batch, errs in scanner.scan_batches(self.root):
+                if self.is_cancelled and self.is_cancelled():
+                    return
                 errors += errs
                 total += len(batch)
                 _emit(self.signals.batch, batch, errors)
@@ -51,15 +54,19 @@ class ThumbSignals(QObject):
 
 
 class ThumbWorker(QRunnable):
-    def __init__(self, image_root: Path, item, size: int, with_phash: bool = False):
+    def __init__(self, image_root: Path, item, size: int, with_phash: bool = False,
+                 is_cancelled=None):
         super().__init__()
         self.image_root = image_root
         self.item = item
         self.size = size
         self.with_phash = with_phash
+        self.is_cancelled = is_cancelled
         self.signals = ThumbSignals()
 
     def run(self):
+        if self.is_cancelled and self.is_cancelled():
+            return
         out, ph = thumbnail.generate(self.image_root, self.item, self.size, self.with_phash)
         if out is not None:
             _emit(self.signals.ready, str(self.item.path), self.size, str(out), ph)
@@ -73,12 +80,15 @@ class DecodeSignals(QObject):
 
 
 class DecodeWorker(QRunnable):
-    def __init__(self, item):
+    def __init__(self, item, is_cancelled=None):
         super().__init__()
         self.item = item
+        self.is_cancelled = is_cancelled
         self.signals = DecodeSignals()
 
     def run(self):
+        if self.is_cancelled and self.is_cancelled():
+            return
         im = thumbnail.decode_original(self.item.path)
         if im is None:
             _emit(self.signals.failed, str(self.item.path), "解码失败或文件损坏")

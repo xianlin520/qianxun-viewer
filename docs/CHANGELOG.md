@@ -3,6 +3,13 @@
 本文件记录千寻图片查看器（QianXun Viewer）的重要变更。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)，版本号遵循语义化版本。
 
+## [1.1.3] - 2026-09-01
+
+### 修复
+
+- 修复关闭窗口后进程残留后台：网络盘 IO 任务未在退出前取消，`QThreadPool` 析构阻塞解释器退出；现关闭时设置取消标志（Scan/Thumb/Decode 均检查）并等待线程池收尾，实测网络扫描中途关窗 5s 内进程完全退出。
+- 单实例连接改为正确 `nextPendingConnection()` 接受并读取，避免挂起连接泄漏。
+
 ## [1.1.2] - 2026-09-01
 
 ### 修复

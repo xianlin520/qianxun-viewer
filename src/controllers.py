@@ -73,6 +73,7 @@ class LibraryController(QObject):
         self._warm_active = 0
         self._warm_pending: set = set()
         self._scroll_restored_for: str | None = None
+        self._cancelled = False
 
         # 目录变更监听：防抖后自动重扫
         self._watcher = QFileSystemWatcher(self)
@@ -94,6 +95,7 @@ class LibraryController(QObject):
     def load_directory(self, path: Path, trash: bool = False) -> None:
         self._load_seq += 1
         seq = self._load_seq
+        self._cancelled = False
         self.trash_mode = trash
         if trash:
             self.cache_root = self.main_root or path
@@ -112,7 +114,7 @@ class LibraryController(QObject):
         self._watcher.removePaths(self._watcher.directories())
         self._watcher.addPath(str(path))
         self.status.emit(f"正在扫描 {path} …", 0)
-        w = ScanWorker(path)
+        w = ScanWorker(path, is_cancelled=self.is_cancelled)
         w.signals.batch.connect(lambda b, e, s=seq: self._on_batch(b, e, s))
         w.signals.finished.connect(lambda t, e, s=seq: self._on_scan_done(t, e, s))
         w.signals.failed.connect(lambda m: self.status.emit(f"扫描失败：{m}", 5000))
@@ -253,7 +255,9 @@ class LibraryController(QObject):
         self._pending_thumbs += 1
         if warm:
             self._warm_pending.add(key)
-        w = ThumbWorker(self.cache_root, item, tier, with_phash=not bool(item.phash))
+        w = ThumbWorker(self.cache_root, item, tier,
+                        with_phash=not bool(item.phash),
+                        is_cancelled=self.is_cancelled)
         w.signals.ready.connect(self._on_thumb_ready)
         w.signals.failed.connect(self._on_thumb_failed)
         self._track(w)
@@ -405,7 +409,7 @@ class LibraryController(QObject):
         return self._by_path.get(path_str)
 
     def request_decode(self, item, callback) -> None:
-        w = DecodeWorker(item)
+        w = DecodeWorker(item, is_cancelled=self.is_cancelled)
         if callback is not None:
             w.signals.ready.connect(callback)
         w.signals.failed.connect(lambda p, m: self.status.emit(f"原图解码失败：{m}", 3000))
@@ -425,6 +429,12 @@ class LibraryController(QObject):
         self.pool.start(w)
 
     # ---------------- 缓存管理 ----------------
+    def is_cancelled(self) -> bool:
+        return self._cancelled
+
+    def request_cancel(self) -> None:
+        """关闭时调用：通知工作线程尽快退出，避免退出期阻塞。"""
+        self._cancelled = True
     def cache_info(self) -> tuple[int, int]:
         """返回 (文件数, 总字节)。"""
         if self.cache_root is None:

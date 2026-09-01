@@ -320,8 +320,10 @@ class MainWindow(QWidget):
         s.last_scroll = self.view.verticalScrollBar().value()
         s.window_geo = self.saveGeometry()
         s.sync()
-        # 等待工作线程收尾，避免退出期信号对象先于线程销毁
-        self.controller.pool.waitForDone(2000)
+        # 通知工作线程取消并等待线程池收尾，
+        # 避免网络 IO 任务在解释器退出时阻塞进程（后台残留）
+        self.controller.request_cancel()
+        self.controller.pool.waitForDone(4000)
         self.controller.move_pool.waitForDone(2000)
         super().closeEvent(e)
 
