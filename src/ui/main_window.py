@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QLabel,
                                QWidget)
 
 from .. import meta
-from ..controllers import SORT_MODES, LibraryController
+from ..controllers import ASPECT_PRESETS, SORT_MODES, LibraryController
 from ..core.settings import AppSettings
 from ..utils import file_ops
 from ..utils.paths import base_dir
@@ -114,6 +114,14 @@ class MainWindow(QWidget):
         self.edit_search.setFixedWidth(160)
         tb.addWidget(self.edit_search)
 
+        self.combo_aspect = QComboBox()
+        self.combo_aspect.setEditable(True)
+        self.combo_aspect.addItems(ASPECT_PRESETS)
+        self.combo_aspect.setFixedWidth(90)
+        self.combo_aspect.setToolTip("按长宽比筛选（整体符合即可，±10%），\n"
+                                     "可自定义如 1.5:3")
+        tb.addWidget(self.combo_aspect)
+
         self.btn_trash = QPushButton("垃圾桶")
         self.btn_trash.setCheckable(True)
         tb.addWidget(self.btn_trash)
@@ -153,6 +161,13 @@ class MainWindow(QWidget):
         self._search_timer.timeout.connect(
             lambda: self.controller.set_filter(self.edit_search.text()))
         self.edit_search.textChanged.connect(lambda _t: self._search_timer.start())
+        self._aspect_timer = QTimer(self)
+        self._aspect_timer.setSingleShot(True)
+        self._aspect_timer.setInterval(200)
+        self._aspect_timer.timeout.connect(
+            lambda: self.controller.set_aspect(self.combo_aspect.currentText()))
+        self.combo_aspect.currentTextChanged.connect(
+            lambda _t: self._aspect_timer.start())
 
         self.view.visible_range_changed.connect(self.controller.ensure_visible_thumbs)
         self.view.geometry_changed.connect(self.controller.on_view_resized)

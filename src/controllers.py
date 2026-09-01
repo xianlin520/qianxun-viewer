@@ -4,6 +4,7 @@
 """控制层：加载 / 排序 / 分页 / 筛选 / 缩略图调度 / 操作分发。"""
 from __future__ import annotations
 
+import math
 import random
 import shutil
 import zlib
@@ -25,6 +26,26 @@ from .workers.workers import (DecodeWorker, HashWorker, MoveWorker, ScanWorker,
 
 SORT_MODES = [("random", "随机"), ("time_asc", "时间正序"), ("time_desc", "时间倒序"),
               ("size_asc", "大小正序"), ("size_desc", "大小倒序")]
+
+ASPECT_TOL = 0.10          # 长宽比容差（对数距离，约 ±10%）
+ASPECT_PRESETS = ["全部", "1:1", "4:3", "3:2", "16:9", "2:1",
+                  "3:4", "2:3", "9:16", "1:2"]
+
+
+def parse_aspect(text: str):
+    """解析 'a:b' 或单个浮点（宽/高）；无效/全部 返回 None。"""
+    text = (text or "").strip()
+    if not text or text in ("全部", "all", "*"):
+        return None
+    try:
+        if ":" in text:
+            a, b = text.split(":", 1)
+            a, b = float(a), float(b)
+            return a / b if a > 0 and b > 0 else None
+        v = float(text)
+        return v if v > 0 else None
+    except ValueError:
+        return None
 
 
 class LibraryController(QObject):
@@ -69,6 +90,7 @@ class LibraryController(QObject):
         self._active: set = set()   # 持有 worker 引用，防止运行期间被 GC
         self._load_seq = 0          # 加载世代令牌：切换目录后旧扫描结果作废
         self.filter_text = ""       # 文件名搜索过滤
+        self.aspect_target: float | None = None   # 长宽比筛选
         self._warm_queue: deque = deque()
         self._warm_active = 0
         self._warm_pending: set = set()
@@ -155,11 +177,20 @@ class LibraryController(QObject):
         if self.filter_text:
             kw = self.filter_text.lower()
             items = [i for i in items if kw in i.path.name.lower()]
+        if self.aspect_target is not None:
+            t = self.aspect_target
+            items = [i for i in items
+                     if i.width and i.height
+                     and abs(math.log(i.width / i.height / t)) <= ASPECT_TOL]
         self.view_items = self._sort(items)
         self._apply_to_model()
 
     def set_filter(self, text: str) -> None:
         self.filter_text = text.strip()
+        self.refresh_view()
+
+    def set_aspect(self, text: str) -> None:
+        self.aspect_target = parse_aspect(text)
         self.refresh_view()
 
     def _sort(self, items):

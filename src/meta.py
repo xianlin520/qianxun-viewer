@@ -6,6 +6,6 @@ from __future__ import annotations
 
 APP_NAME = "千寻图片查看器"
 APP_EN = "QianXun Viewer"
-VERSION = "1.1.4"
+VERSION = "1.2.0"
 AUTHOR = "羡林i (Y_XianLin)"
 COPYRIGHT = f"版权所有 © 2026 羡林i (Y_XianLin)，保留所有权利。"
