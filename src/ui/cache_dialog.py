@@ -1,13 +1,14 @@
 # 千寻图片查看器 QianXun Viewer
 # 版权所有 (C) 羡林i (Y_XianLin)，保留所有权利。
 
-"""缓存管理对话框：查看 .qx_cache 占用，清理孤儿/全部缓存。"""
+"""缓存管理对话框：查看本地缓存占用，清理孤儿/全部缓存。"""
 from __future__ import annotations
 
 from PySide6.QtGui import QPixmapCache
 from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QPushButton,
                                QVBoxLayout)
 
+from ..core import thumbnail
 from ..utils.format import human_size
 
 
@@ -37,8 +38,10 @@ class CacheDialog(QDialog):
     def _refresh(self) -> None:
         n, b = self.controller.cache_info()
         root = self.controller.cache_root
-        self.label.setText(f"缓存目录：{root / '.qx_cache' if root else '—'}\n"
-                           f"共 {n} 个文件 · 占用 {human_size(b)}")
+        loc = thumbnail.cache_root_for(root) if root else "—"
+        self.label.setText(f"本地缓存目录：{loc}\n"
+                           f"共 {n} 个文件 · 占用 {human_size(b)}\n"
+                           f"（缓存不写入图片目录，云同步不产生流量）")
 
     def _clean_orphans(self) -> None:
         removed = self.controller.clean_cache_orphans()

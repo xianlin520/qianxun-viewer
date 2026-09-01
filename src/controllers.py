@@ -430,7 +430,7 @@ class LibraryController(QObject):
         if self.cache_root is None:
             return 0, 0
         n = b = 0
-        base = self.cache_root / thumbnail.CACHE_DIR
+        base = thumbnail.cache_root_for(self.cache_root)
         try:
             for f in base.rglob("*.jpg"):
                 n += 1
@@ -445,7 +445,7 @@ class LibraryController(QObject):
             return 0
         valid = {thumbnail.cache_key(it) for it in self.all_items}
         removed = 0
-        base = self.cache_root / thumbnail.CACHE_DIR
+        base = thumbnail.cache_root_for(self.cache_root)
         if not base.exists():
             return 0
         for tier_dir in base.iterdir():
@@ -462,7 +462,7 @@ class LibraryController(QObject):
 
     def clean_cache_all(self) -> None:
         if self.cache_root is not None:
-            shutil.rmtree(self.cache_root / thumbnail.CACHE_DIR,
+            shutil.rmtree(thumbnail.cache_root_for(self.cache_root),
                           ignore_errors=True)
 
     def _on_dups(self, groups) -> None:

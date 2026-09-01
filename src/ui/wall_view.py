@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QRect, Qt, QEvent, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPixmap, QPixmapCache
 from PySide6.QtWidgets import QAbstractScrollArea
 
@@ -29,6 +29,9 @@ class WallView(QAbstractScrollArea):
         self._focus = -1
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        # 视口上的滚轮事件不会走到子类的 wheelEvent，
+        # 用事件过滤器在 viewport 上拦截保证加速滚动生效
+        self.viewport().installEventFilter(self)
         self.verticalScrollBar().valueChanged.connect(self._on_scroll)
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
@@ -115,13 +118,21 @@ class WallView(QAbstractScrollArea):
         self.visible_range_changed.emit(first, last)
 
     # ---------------- 交互 ----------------
+    def eventFilter(self, obj, e) -> bool:
+        if obj is self.viewport() and e.type() == QEvent.Type.Wheel:
+            self._wheel_scroll(e.angleDelta().y())
+            return True
+        return super().eventFilter(obj, e)
+
     def wheelEvent(self, e) -> None:
+        self._wheel_scroll(e.angleDelta().y())
+        e.accept()
+
+    def _wheel_scroll(self, dy: int) -> None:
         # 图片墙加速滚动：每格滚轮至少滚动一行高度
         step = max(120, self.row_height)
-        dy = e.angleDelta().y()
         sb = self.verticalScrollBar()
         sb.setValue(sb.value() - int(dy / 120 * step))
-        e.accept()
 
     def mousePressEvent(self, e) -> None:
         if e.button() == Qt.MouseButton.LeftButton:

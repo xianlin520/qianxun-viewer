@@ -3,12 +3,14 @@
 
 """缩略图生成与磁盘缓存。
 
-缓存目录为图片目录下隐藏的 .qx_cache/，按 256/512 两档存 JPEG；
+缓存存放在本地用户目录 %LOCALAPPDATA%/QianXunViewer/cache/<目录指纹>/，
+按 256/512 两档存 JPEG——不写入图片目录，避免云同步目录产生上传/下载流量；
 缓存名 = sha1(绝对路径|大小|mtime)，文件变更后天然失效重建。
 """
 from __future__ import annotations
 
 import hashlib
+import os
 import time
 from pathlib import Path
 
@@ -16,7 +18,7 @@ from PIL import Image, ImageOps
 
 from . import phash as _phash
 
-CACHE_DIR = ".qx_cache"
+CACHE_DIR = ".qx_cache"   # 历史遗留目录名（仅用于扫描跳过/旧缓存兼容）
 THUMB_SIZES = (256, 512)
 MAX_DECODE_PIXELS = 120_000_000  # 原图解码像素上限，超限降采样防 OOM
 
@@ -28,8 +30,17 @@ def cache_key(item) -> str:
     return hashlib.sha1(raw.encode("utf-8", "surrogatepass")).hexdigest()
 
 
+def cache_root_for(image_root: Path) -> Path:
+    """本地缓存根目录（不写入图片目录，避免云同步流量）。"""
+    key = hashlib.sha1(
+        str(image_root.resolve()).encode("utf-8", "surrogatepass")).hexdigest()[:16]
+    base = Path(os.environ.get("LOCALAPPDATA",
+                               str(Path.home() / "AppData" / "Local")))
+    return base / "QianXunViewer" / "cache" / key
+
+
 def thumb_path(image_root: Path, item, size: int) -> Path:
-    return image_root / CACHE_DIR / str(size) / f"{cache_key(item)}.jpg"
+    return cache_root_for(image_root) / str(size) / f"{cache_key(item)}.jpg"
 
 
 def has_cache(image_root: Path, item, size: int) -> bool:

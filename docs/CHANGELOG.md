@@ -3,6 +3,16 @@
 本文件记录千寻图片查看器（QianXun Viewer）的重要变更。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)，版本号遵循语义化版本。
 
+## [1.1.1] - 2026-09-01
+
+### 变更
+
+- 缩略图缓存迁移到本地用户目录 `%LOCALAPPDATA%/QianXunViewer/cache/<目录指纹>/`，**不再写入图片目录**——云同步/网盘目录不再因缓存产生上传下载流量；图片目录仅保留 `favorites.json` 与 `Remove/` 小体积数据。旧版遗留在图片目录的 `.qx_cache` 可手动删除。
+
+### 修复
+
+- 修复图片墙视口上滚轮无响应：滚轮事件改由 viewport 事件过滤器拦截（QAbstractScrollArea 子类 wheelEvent 收不到视口事件）。
+
 ## [1.1.0] - 2026-09-01
 
 ### 新增
