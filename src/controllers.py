@@ -5,10 +5,13 @@
 from __future__ import annotations
 
 import random
+import shutil
 import zlib
+from collections import deque
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QThreadPool, Signal
+from PySide6.QtCore import (QFileSystemWatcher, QObject, QThreadPool, QTimer,
+                            Signal)
 from PySide6.QtGui import QPixmap
 
 from .core import thumbnail
@@ -65,6 +68,19 @@ class LibraryController(QObject):
         self.move_pool.setMaxThreadCount(1)
         self._active: set = set()   # 持有 worker 引用，防止运行期间被 GC
         self._load_seq = 0          # 加载世代令牌：切换目录后旧扫描结果作废
+        self.filter_text = ""       # 文件名搜索过滤
+        self._warm_queue: deque = deque()
+        self._warm_active = 0
+        self._warm_pending: set = set()
+        self._scroll_restored_for: str | None = None
+
+        # 目录变更监听：防抖后自动重扫
+        self._watcher = QFileSystemWatcher(self)
+        self._reload_timer = QTimer(self)
+        self._reload_timer.setSingleShot(True)
+        self._reload_timer.setInterval(800)
+        self._reload_timer.timeout.connect(self.reload_current)
+        self._watcher.directoryChanged.connect(lambda _p: self._reload_timer.start())
 
     def _track(self, w) -> None:
         """保持 worker 的 Python 引用至其信号发出完毕。"""
@@ -93,6 +109,8 @@ class LibraryController(QObject):
         self._dup_done = False
         self.favorites = FavoritesStore(path)
         self.delegate.image_root = self.cache_root
+        self._watcher.removePaths(self._watcher.directories())
+        self._watcher.addPath(str(path))
         self.status.emit(f"正在扫描 {path} …", 0)
         w = ScanWorker(path)
         w.signals.batch.connect(lambda b, e, s=seq: self._on_batch(b, e, s))
@@ -125,17 +143,22 @@ class LibraryController(QObject):
         self.status.emit(msg, 5000)
         self.refresh_view()
         self.scan_done.emit()
-        # 视口之外的其余图片低优先级预热（顺带计算 pHash）
-        for it in self.all_items:
-            self._submit_thumb(it, priority=-1)
+        self._warm_all_thumbs()
 
     # ---------------- 视图组织 ----------------
     def refresh_view(self) -> None:
         items = list(self.all_items)
         if self.fav_only:
             items = [i for i in items if i.favorite]
+        if self.filter_text:
+            kw = self.filter_text.lower()
+            items = [i for i in items if kw in i.path.name.lower()]
         self.view_items = self._sort(items)
         self._apply_to_model()
+
+    def set_filter(self, text: str) -> None:
+        self.filter_text = text.strip()
+        self.refresh_view()
 
     def _sort(self, items):
         m = self.sort_mode
@@ -219,20 +242,41 @@ class LibraryController(QObject):
         for row in range(max(0, first), min(len(items), last + 1)):
             self._submit_thumb(items[row], priority=1)
 
-    def _submit_thumb(self, item, priority: int = 0) -> None:
+    def _submit_thumb(self, item, priority: int = 0, warm: bool = False) -> bool:
         if item.corrupted or self.root is None:
-            return
+            return False
         tier = self.current_tier()
         key = (str(item.path), tier)
         if key in self._queued:
-            return
+            return False
         self._queued.add(key)
         self._pending_thumbs += 1
+        if warm:
+            self._warm_pending.add(key)
         w = ThumbWorker(self.cache_root, item, tier, with_phash=not bool(item.phash))
         w.signals.ready.connect(self._on_thumb_ready)
         w.signals.failed.connect(self._on_thumb_failed)
         self._track(w)
         self.pool.start(w, priority)
+        return True
+
+    # ---------------- 预热泵：限量并发，可见高优先始终插队 ----------------
+    def _warm_all_thumbs(self) -> None:
+        self._warm_queue = deque(self.all_items)
+        self._pump_warm()
+
+    def _pump_warm(self) -> None:
+        while self._warm_active < 8 and self._warm_queue:
+            it = self._warm_queue.popleft()
+            if self._submit_thumb(it, priority=-1, warm=True):
+                self._warm_active += 1
+
+    def _warm_done(self, path_str: str, size: int) -> None:
+        key = (path_str, size)
+        if key in self._warm_pending:
+            self._warm_pending.discard(key)
+            self._warm_active -= 1
+            self._pump_warm()
 
     def _on_thumb_ready(self, path_str, size, cache_file, phash) -> None:
         item = self._by_path.get(path_str)
@@ -242,12 +286,14 @@ class LibraryController(QObject):
             self._repaint_row(path_str)
         self.wall_update.emit()
         self._pending_thumbs -= 1
+        self._warm_done(path_str, size)
         if self._scan_finished and self._pending_thumbs <= 0 and not self._dup_done:
             self._dup_done = True
             self.run_dup_detect()
 
     def _on_thumb_failed(self, path_str, size) -> None:
         self._pending_thumbs -= 1
+        self._warm_done(path_str, size)
         item = self._by_path.get(path_str)
         if item is not None:
             item.corrupted = True
@@ -287,6 +333,11 @@ class LibraryController(QObject):
         self.status.emit(f"已移入 Remove：{Path(dst).name}", 3000)
 
     # ---------------- 垃圾桶 ----------------
+    def reload_current(self) -> None:
+        """重新扫描当前目录（手动 F5 / 目录变更防抖自动触发）。"""
+        if self.root is not None:
+            self.status.emit("正在刷新…", 0)
+            self.load_directory(self.root, trash=self.trash_mode)
     def set_trash_mode(self, on: bool) -> None:
         if on == self.trash_mode or self.main_root is None:
             return
@@ -372,6 +423,47 @@ class LibraryController(QObject):
         w.signals.finished.connect(self._on_dups)
         self._track(w)
         self.pool.start(w)
+
+    # ---------------- 缓存管理 ----------------
+    def cache_info(self) -> tuple[int, int]:
+        """返回 (文件数, 总字节)。"""
+        if self.cache_root is None:
+            return 0, 0
+        n = b = 0
+        base = self.cache_root / thumbnail.CACHE_DIR
+        try:
+            for f in base.rglob("*.jpg"):
+                n += 1
+                b += f.stat().st_size
+        except OSError:
+            pass
+        return n, b
+
+    def clean_cache_orphans(self) -> int:
+        """删除当前库中已不存在图片的孤儿缓存，返回删除数。"""
+        if self.cache_root is None:
+            return 0
+        valid = {thumbnail.cache_key(it) for it in self.all_items}
+        removed = 0
+        base = self.cache_root / thumbnail.CACHE_DIR
+        if not base.exists():
+            return 0
+        for tier_dir in base.iterdir():
+            if not tier_dir.is_dir():
+                continue
+            for f in tier_dir.glob("*.jpg"):
+                if f.stem not in valid:
+                    try:
+                        f.unlink()
+                        removed += 1
+                    except OSError:
+                        pass
+        return removed
+
+    def clean_cache_all(self) -> None:
+        if self.cache_root is not None:
+            shutil.rmtree(self.cache_root / thumbnail.CACHE_DIR,
+                          ignore_errors=True)
 
     def _on_dups(self, groups) -> None:
         for gi, g in enumerate(groups):

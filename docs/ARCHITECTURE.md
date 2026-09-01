@@ -46,6 +46,8 @@
 - **引用保活**：`LibraryController._track(w)` 持有 worker 引用至其终止信号发出，避免运行期被 GC 导致 "Signal source has been deleted"。
 - **退出静默**：`workers._emit()` 对退出期接收端已销毁的 RuntimeError 静默；`closeEvent` 中 `waitForDone` 等待线程池收尾。
 - **加载世代令牌 `_load_seq`**：切换目录后旧 ScanWorker 的批次/完成信号一律作废，杜绝跨目录数据污染。
+- **预热泵**：`_warm_all_thumbs` 不再一次性洪泛提交，改为 deque + `_pump_warm` 限量并发（≤8）；可见任务 priority=1 始终插队，快速滚动不做无效解码。
+- **目录监听**：`QFileSystemWatcher` + 800ms 防抖自动重扫；`reload_current()`（F5/按钮）兼作网络盘等监听不可靠场景的手动入口。
 
 ## 5. 缩略图缓存
 
@@ -75,7 +77,7 @@
 
 ## 9. 查重
 
-- pHash 在缩略图生成时计算（32×32 灰度，hash_size=8 → 64bit hex）。
+- pHash 为 numpy 自实现（`core/phash.py`：32×32 灰度 + 二维 DCT，取 8×8 低频与中值比较得 64bit），不依赖 imagehash/scipy，包体显著缩小。
 - 全量加载完成后 `HashWorker` 后台 Union-Find 分组，汉明距离阈值 6；结果写 `dup_group`，UI 打蓝标；面板支持按最大/最新保留（其余走可逆移出）。
 
 ## 10. 状态持久化（QSettings INI）
@@ -88,7 +90,13 @@
 - `--add-data` 携带 `assets/logo.png` 与 `src/ui/styles.qss`；图标经 `--icon` 嵌入。
 - onefile 首次启动自解压较慢；onedir 启动更快，二者功能一致。
 
-## 12. 扩展点
+## 12. IO 容错（网络盘/慢速介质）
+
+- 扫描：`stat` 与文件头读取失败均退避重试（0.2s 起），仍失败才计错误/标记损坏。
+- 缩略图 `generate` 与原图 `decode_original`：3 次退避重试（0.3s/0.6s），瞬时 SMB/云盘 IO 错误不再误判「已损坏」。
+- 缓存写入失败（磁盘满/只读）静默降级，状态栏提示。
+
+## 13. 扩展点
 
 - 新视图：实现 `set_items / visible_range_changed / item_clicked / customContextMenuRequested` 即可接入控制器。
 - 新排序：`SORT_MODES` + `_sort` 分支 + 信息行映射。

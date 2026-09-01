@@ -26,17 +26,21 @@ class ViewerOverlay(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
         self._user_zoomed = False
-        # 可见的操作按钮：上一张 / 下一张 / 退出
+        self._rotate = 0
+        # 可见的操作按钮：上一张 / 下一张 / 旋转 / 退出
         self._btn_prev = QPushButton("‹", self)
         self._btn_next = QPushButton("›", self)
+        self._btn_rotate = QPushButton("⟳", self)
         self._btn_close = QPushButton("✕", self)
         self._btn_prev.setToolTip("上一张 (←)")
         self._btn_next.setToolTip("下一张 (→)")
+        self._btn_rotate.setToolTip("旋转 90° (R)")
         self._btn_close.setToolTip("退出 (Esc)")
-        for b in (self._btn_prev, self._btn_next, self._btn_close):
+        for b in (self._btn_prev, self._btn_next, self._btn_rotate, self._btn_close):
             b.setFixedSize(40, 40)
         self._btn_prev.clicked.connect(lambda: self.show_index(self._index - 1))
         self._btn_next.clicked.connect(lambda: self.show_index(self._index + 1))
+        self._btn_rotate.clicked.connect(self.rotate90)
         self._btn_close.clicked.connect(self.hide)
         self.hide()
 
@@ -52,8 +56,9 @@ class ViewerOverlay(QWidget):
     def _place_buttons(self) -> None:
         w = self.width()
         self._btn_close.move(w - 52, 12)
-        self._btn_next.move(w - 96, 12)
-        self._btn_prev.move(w - 140, 12)
+        self._btn_rotate.move(w - 96, 12)
+        self._btn_next.move(w - 140, 12)
+        self._btn_prev.move(w - 184, 12)
 
     def resizeEvent(self, e) -> None:
         super().resizeEvent(e)
@@ -67,6 +72,7 @@ class ViewerOverlay(QWidget):
         item = items[self._index]
         self._pix = self.controller.fast_pixmap(item)   # 先 512 档缓存
         self._user_zoomed = False
+        self._rotate = 0
         # 适应窗口但不放大超过 100%，避免小缓存图导致原图被拉得过大
         self._scale = min(self._fit_scale(), 1.0)
         self._offset = QPointF(0, 0)
@@ -81,7 +87,17 @@ class ViewerOverlay(QWidget):
         if self._pix.isNull():
             return 1.0
         r = self.rect()
-        return min(r.width() / self._pix.width(), r.height() / self._pix.height()) * 0.95
+        pw, ph = self._pix.width(), self._pix.height()
+        if self._rotate % 180 == 90:
+            pw, ph = ph, pw
+        return min(r.width() / pw, r.height() / ph) * 0.95
+
+    def rotate90(self) -> None:
+        self._rotate = (self._rotate + 90) % 360
+        if not self._user_zoomed:
+            self._scale = min(self._fit_scale(), 1.0)
+            self._offset = QPointF(0, 0)
+        self.update()
 
     def _on_decoded(self, path_str, qimg) -> None:
         if self._index < 0:
@@ -102,6 +118,8 @@ class ViewerOverlay(QWidget):
         if not self._pix.isNull():
             p.translate(QPointF(self.rect().center()) + self._offset)
             p.scale(self._scale, self._scale)
+            if self._rotate:
+                p.rotate(self._rotate)
             p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, self._scale < 2.0)
             p.drawPixmap(QPoint(-self._pix.width() // 2, -self._pix.height() // 2), self._pix)
             p.resetTransform()
@@ -170,5 +188,7 @@ class ViewerOverlay(QWidget):
         elif k == Qt.Key.Key_F and 0 <= self._index < len(items):
             self.controller.toggle_favorite(items[self._index])
             self.update()
+        elif k == Qt.Key.Key_R:
+            self.rotate90()
         else:
             super().keyPressEvent(e)

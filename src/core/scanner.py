@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Iterator
 
@@ -16,13 +17,16 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
 _SKIP_DIRS = {"remove", ".qx_cache"}
 
 
-def _read_dimensions(path: Path) -> tuple[int, int]:
-    """仅读头部获取分辨率，不解码像素。"""
-    try:
-        with Image.open(path) as im:
-            return im.size
-    except Exception:
-        return 0, 0
+def _read_dimensions(path: Path, retries: int = 3) -> tuple[int, int]:
+    """仅读头部获取分辨率；网络盘等慢速介质瞬时失败时退避重试。"""
+    for i in range(retries):
+        try:
+            with Image.open(path) as im:
+                return im.size
+        except Exception:
+            if i < retries - 1:
+                time.sleep(0.2 * (i + 1))
+    return 0, 0
 
 
 def scan_batches(root: Path, batch_size: int = 64) -> Iterator[tuple[list[ImageItem], int]]:
@@ -40,8 +44,12 @@ def scan_batches(root: Path, batch_size: int = 64) -> Iterator[tuple[list[ImageI
             try:
                 st = path.stat()
             except OSError:
-                errors += 1
-                continue
+                try:  # 网络盘瞬时失败重试一次
+                    time.sleep(0.2)
+                    st = path.stat()
+                except OSError:
+                    errors += 1
+                    continue
             w, h = _read_dimensions(path)
             batch.append(
                 ImageItem(path=path, size_bytes=st.st_size, mtime=st.st_mtime,

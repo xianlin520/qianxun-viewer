@@ -26,6 +26,8 @@ class WallView(QAbstractScrollArea):
         self._total_h = 0
         self.row_height = 180
         self.image_root = None
+        self._focus = -1
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.verticalScrollBar().valueChanged.connect(self._on_scroll)
         self._debounce = QTimer(self)
@@ -36,6 +38,8 @@ class WallView(QAbstractScrollArea):
     # ---------------- 数据与布局 ----------------
     def set_items(self, items) -> None:
         self._items = list(items)
+        if self._focus >= len(self._items):
+            self._focus = -1
         self.relayout()
         self.update()
 
@@ -123,9 +127,70 @@ class WallView(QAbstractScrollArea):
         if e.button() == Qt.MouseButton.LeftButton:
             idx = self.index_at(e.position())
             if idx >= 0:
+                self._focus = idx
+                self.update()
                 self.item_clicked.emit(idx)
                 return
         super().mousePressEvent(e)
+
+    def keyPressEvent(self, e) -> None:
+        # 键盘导航：方向键移动焦点，Enter 进大图
+        n = len(self._items)
+        if n == 0:
+            super().keyPressEvent(e)
+            return
+        k = e.key()
+        if k == Qt.Key.Key_Return or k == Qt.Key.Key_Enter:
+            if self._focus >= 0:
+                self.item_clicked.emit(self._focus)
+            return
+        if k not in (Qt.Key.Key_Left, Qt.Key.Key_Right,
+                     Qt.Key.Key_Up, Qt.Key.Key_Down):
+            super().keyPressEvent(e)
+            return
+        if self._focus < 0:
+            new = 0
+        elif k == Qt.Key.Key_Left:
+            new = max(0, self._focus - 1)
+        elif k == Qt.Key.Key_Right:
+            new = min(n - 1, self._focus + 1)
+        else:
+            new = self._vertical_neighbor(self._focus, up=(k == Qt.Key.Key_Up))
+        if new != self._focus:
+            self._focus = new
+            self._ensure_visible(new)
+            self.update()
+
+    def _vertical_neighbor(self, idx: int, up: bool) -> int:
+        cur = self._cells[idx]
+        if cur is None:
+            return idx
+        cx = cur.center().x()
+        best, best_d = idx, None
+        for i, cell in enumerate(self._cells):
+            if cell is None or i == idx:
+                continue
+            if up and cell.y() >= cur.y():
+                continue
+            if not up and cell.y() <= cur.y():
+                continue
+            d = abs(cell.center().x() - cx) + abs(cell.y() - cur.y()) * 0.01
+            if best_d is None or d < best_d:
+                best_d = d
+                best = i
+        return best
+
+    def _ensure_visible(self, idx: int) -> None:
+        cell = self._cells[idx]
+        if cell is None:
+            return
+        sb = self.verticalScrollBar()
+        v = sb.value()
+        vp_h = self.viewport().height()
+        if cell.y() < v:
+            sb.setValue(cell.y())
+        elif cell.bottom() > v + vp_h:
+            sb.setValue(cell.bottom() - vp_h)
 
     # ---------------- 绘制 ----------------
     def paintEvent(self, event) -> None:
@@ -135,7 +200,7 @@ class WallView(QAbstractScrollArea):
         p.translate(0, -v)
         view_top, view_bot = v, v + self.viewport().height()
         tier = 512 if self.row_height > 256 else 256
-        for item, cell in zip(self._items, self._cells):
+        for idx, (item, cell) in enumerate(zip(self._items, self._cells)):
             if cell is None or cell.bottom() < view_top or cell.y() > view_bot:
                 continue
             if item.corrupted:
@@ -180,4 +245,10 @@ class WallView(QAbstractScrollArea):
                 f.setPixelSize(10)
                 p.setFont(f)
                 p.drawText(badge, Qt.AlignmentFlag.AlignCenter, "重")
+            if idx == self._focus:
+                pen = p.pen()
+                p.setPen(QColor("#8ab4f8"))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRect(cell.adjusted(1, 1, -1, -1))
+                p.setPen(pen)
         p.end()

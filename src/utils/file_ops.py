@@ -90,3 +90,12 @@ def reveal_in_explorer(path: Path) -> None:
 def copy_pixmap(pixmap) -> None:
     from PySide6.QtWidgets import QApplication
     QApplication.clipboard().setPixmap(pixmap)
+
+
+def copy_file(path: Path) -> None:
+    """复制文件对象到剪贴板（可粘贴到资源管理器）。"""
+    from PySide6.QtCore import QMimeData, QUrl
+    from PySide6.QtWidgets import QApplication
+    md = QMimeData()
+    md.setUrls([QUrl.fromLocalFile(str(path))])
+    QApplication.clipboard().setMimeData(md)

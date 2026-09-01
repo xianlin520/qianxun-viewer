@@ -6,17 +6,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut, QIcon
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QLabel, QMenu,
-                               QMessageBox, QPushButton, QSlider, QStatusBar,
-                               QToolBar, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QLabel,
+                               QLineEdit, QMenu, QMessageBox, QPushButton,
+                               QSlider, QStatusBar, QToolBar, QVBoxLayout,
+                               QWidget)
 
 from .. import meta
 from ..controllers import SORT_MODES, LibraryController
 from ..core.settings import AppSettings
 from ..utils import file_ops
 from ..utils.paths import base_dir
+from .cache_dialog import CacheDialog
 from .duplicates_dialog import DuplicatesDialog
 from .grid_view import GridView, ImageModel, ThumbDelegate
 from .pager import PagerBar
@@ -82,6 +84,10 @@ class MainWindow(QWidget):
         self.btn_open = QPushButton("打开目录")
         tb.addWidget(self.btn_open)
 
+        self.btn_refresh = QPushButton("刷新")
+        self.btn_refresh.setToolTip("重新扫描当前目录 (F5)")
+        tb.addWidget(self.btn_refresh)
+
         self.combo_sort = QComboBox()
         for _key, label in SORT_MODES:
             self.combo_sort.addItem(label)
@@ -102,6 +108,12 @@ class MainWindow(QWidget):
         self.btn_dup = QPushButton("查找重复")
         tb.addWidget(self.btn_dup)
 
+        self.edit_search = QLineEdit()
+        self.edit_search.setPlaceholderText("搜索文件名…")
+        self.edit_search.setClearButtonEnabled(True)
+        self.edit_search.setFixedWidth(160)
+        tb.addWidget(self.edit_search)
+
         self.btn_trash = QPushButton("垃圾桶")
         self.btn_trash.setCheckable(True)
         tb.addWidget(self.btn_trash)
@@ -113,11 +125,15 @@ class MainWindow(QWidget):
         self.btn_settings = QPushButton("设置")
         tb.addWidget(self.btn_settings)
 
+        self.btn_cache = QPushButton("缓存")
+        tb.addWidget(self.btn_cache)
+
         self.btn_about = QPushButton("关于")
         tb.addWidget(self.btn_about)
 
     def _wire(self) -> None:
         self.btn_open.clicked.connect(self._open_dir)
+        self.btn_refresh.clicked.connect(self.controller.reload_current)
         self.combo_sort.currentIndexChanged.connect(
             lambda i: self.controller.set_sort(SORT_MODES[i][0]))
         self.btn_reseed.clicked.connect(self.controller.reseed)
@@ -129,6 +145,14 @@ class MainWindow(QWidget):
         self.btn_mode.toggled.connect(lambda _on: self._sync_mode_ui())
         self.btn_settings.clicked.connect(self._open_settings)
         self.btn_about.clicked.connect(self._show_about)
+        self.btn_cache.clicked.connect(
+            lambda: CacheDialog(self.controller, self).show())
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(200)
+        self._search_timer.timeout.connect(
+            lambda: self.controller.set_filter(self.edit_search.text()))
+        self.edit_search.textChanged.connect(lambda _t: self._search_timer.start())
 
         self.view.visible_range_changed.connect(self.controller.ensure_visible_thumbs)
         self.view.geometry_changed.connect(self.controller.on_view_resized)
@@ -153,6 +177,7 @@ class MainWindow(QWidget):
         self.controller.scan_done.connect(self._restore_scroll)
 
         QShortcut(QKeySequence("F11"), self, self._toggle_fullscreen)
+        QShortcut(QKeySequence("F5"), self, self.controller.reload_current)
         QShortcut(QKeySequence("R"), self,
                   self._guard(lambda: self.controller.trash_mode and [
                       self.controller.restore_item(i) for i in self._selected_items()]))
@@ -278,7 +303,10 @@ class MainWindow(QWidget):
             self.controller.load_directory(Path(start))
 
     def _restore_scroll(self) -> None:
-        if self.controller.root and str(self.controller.root) == self.settings.last_dir:
+        root = self.controller.root
+        if (root and str(root) == self.settings.last_dir
+                and self.controller._scroll_restored_for != str(root)):
+            self.controller._scroll_restored_for = str(root)
             self.view.verticalScrollBar().setValue(self.settings.last_scroll)
 
     def closeEvent(self, e) -> None:
@@ -363,6 +391,7 @@ class MainWindow(QWidget):
             acts["fav"] = menu.addAction("切换最爱 (F)")
             acts["save"] = menu.addAction("另存为 (Ctrl+S)")
             acts["copy"] = menu.addAction("复制图片 (Ctrl+C)")
+            acts["copyfile"] = menu.addAction("复制文件")
             acts["reveal"] = menu.addAction("打开所在位置 (Ctrl+O)")
             acts["remove"] = menu.addAction("移出图片 (Del)")
         return menu, acts
@@ -374,6 +403,7 @@ class MainWindow(QWidget):
             "fav": lambda: [self.controller.toggle_favorite(i) for i in items],
             "save": lambda: self._save(items[0]),
             "copy": lambda: self.controller.copy_item(items[0]),
+            "copyfile": lambda: file_ops.copy_file(items[0].path),
             "reveal": lambda: self.controller.reveal_item(items[0]),
             "remove": lambda: [self.controller.remove_item(i) for i in items],
             "restore": lambda: [self.controller.restore_item(i) for i in items],
