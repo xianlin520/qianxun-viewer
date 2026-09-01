@@ -89,8 +89,13 @@ class AppSettings:
     def last_scroll(self, v: int) -> None:
         self._s.setValue("last_scroll", int(v))
 
-    def sync(self) -> None:
-        self._s.sync()
+    @property
+    def dup_threshold(self) -> int:
+        return self._get_int("dup_threshold", 4)
+
+    @dup_threshold.setter
+    def dup_threshold(self, v: int) -> None:
+        self._s.setValue("dup_threshold", int(v))
 
     @property
     def window_geo(self):
@@ -99,3 +104,6 @@ class AppSettings:
     @window_geo.setter
     def window_geo(self, v) -> None:
         self._s.setValue("window_geo", v)
+
+    def sync(self) -> None:
+        self._s.sync()

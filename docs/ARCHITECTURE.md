@@ -78,7 +78,7 @@
 ## 9. 查重
 
 - pHash 为 numpy 自实现（`core/phash.py`：32×32 灰度 + 二维 DCT，取 8×8 低频与中值比较得 64bit），不依赖 imagehash/scipy，包体显著缩小。
-- 全量加载完成后 `HashWorker` 后台 Union-Find 分组，汉明距离阈值 6；结果写 `dup_group`，UI 打蓝标；面板支持按最大/最新保留（其余走可逆移出）。
+- 全量加载完成后 `HashWorker` 后台「簇代表」聚类（成员与组首代表汉明距离 ≤ 阈值，默认 4，设置可调 0–12），避免传递性链式合并；结果写 `dup_group`，UI 打蓝标；面板支持按最大/最新保留（其余走可逆移出）。
 
 ## 10. 状态持久化（QSettings INI）
 

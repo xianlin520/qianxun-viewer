@@ -104,13 +104,15 @@ class HashSignals(QObject):
 
 
 class HashWorker(QRunnable):
-    def __init__(self, items):
+    def __init__(self, items, threshold: int = 4):
         super().__init__()
         self.items = items
+        self.threshold = threshold
         self.signals = HashSignals()
 
     def run(self):
-        _emit(self.signals.finished, duplicates.find_groups(self.items))
+        _emit(self.signals.finished,
+              duplicates.find_groups(self.items, self.threshold))
 
 
 class MoveSignals(QObject):

@@ -423,7 +423,7 @@ class LibraryController(QObject):
         self.run_dup_detect()
 
     def run_dup_detect(self) -> None:
-        w = HashWorker(self.all_items)
+        w = HashWorker(self.all_items, self.settings.dup_threshold)
         w.signals.finished.connect(self._on_dups)
         self._track(w)
         self.pool.start(w)

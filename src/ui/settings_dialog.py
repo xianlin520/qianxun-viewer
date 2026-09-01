@@ -4,8 +4,9 @@
 """设置对话框：默认读取目录 / 默认保存目录。"""
 from __future__ import annotations
 
-from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-                               QHBoxLayout, QLineEdit, QPushButton, QWidget)
+from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog,
+                               QFormLayout, QHBoxLayout, QLineEdit,
+                               QPushButton, QSpinBox, QWidget)
 
 
 class SettingsDialog(QDialog):
@@ -18,6 +19,12 @@ class SettingsDialog(QDialog):
         self.edit_save = QLineEdit(settings.default_save_dir)
         form.addRow("默认读取目录", self._row(self.edit_open))
         form.addRow("默认保存目录", self._row(self.edit_save))
+        self.spin_dup = QSpinBox()
+        self.spin_dup.setRange(0, 12)
+        self.spin_dup.setValue(settings.dup_threshold)
+        self.spin_dup.setToolTip("pHash 汉明距离阈值：越小越严格，\n"
+                                 "出现“不像的也被判重复”时请调小")
+        form.addRow("查重严格度（汉明距离阈值）", self.spin_dup)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
                                    | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
@@ -42,4 +49,5 @@ class SettingsDialog(QDialog):
     def accept(self) -> None:
         self.settings.default_open_dir = self.edit_open.text().strip()
         self.settings.default_save_dir = self.edit_save.text().strip()
+        self.settings.dup_threshold = self.spin_dup.value()
         super().accept()
