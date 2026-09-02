@@ -1,6 +1,6 @@
 # 千寻图片查看器 QianXun Viewer
 
-![logo](assets/logo.png)
+<img src="assets/logo.png" width="96" alt="千寻图片查看器 Logo">
 
 > 面向大规模本地图片库（千张级、单张 10~60MB）的高性能 Windows 桌面查看器。
 > 缩略图优先 · 全程异步 · 无损操作 · 云盘友好。
