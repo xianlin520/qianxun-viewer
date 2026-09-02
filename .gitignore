@@ -12,3 +12,6 @@ dist/
 # IDE
 .idea/
 .vscode/
+
+# 本地密钥（绝不入库）
+.secrets/
