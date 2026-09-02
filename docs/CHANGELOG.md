@@ -3,6 +3,16 @@
 本文件记录千寻图片查看器（QianXun Viewer）的重要变更。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)，版本号遵循语义化版本。
 
+## [1.3.0] - 2026-09-02（测试版，未发布发行版）
+
+### 新增（阿里云 OSS 在线库，详见 docs/ONLINE_DESIGN.md）
+
+- P1 上传管道：「上传到云」对话框，配置/测试连接/批量增量上传（resumable、sha1 索引跳过已传、进度条）。
+- P2 在线库：「在线库」开关；列对象 + `image/info` 并发取宽高；缩略图走 OSS IMG 签名 URL（resize+format）下载入本地缓存；大图签名 URL 按需下载；复用图片墙/分页/大图全部 UI。
+- P3 分享：右键「复制外链」= ≤7 天签名 URL（本地项未上传时提示先传）。
+- 设置新增 OSS 四项（Endpoint/Bucket/AK/SK，仅存本机用户目录）。
+- 新增依赖 oss2； Fake OSS 冒烟 11/11 通过；真实 Bucket 端到端待凭据联调。
+
 ## [1.2.1] - 2026-09-01
 
 ### 修复

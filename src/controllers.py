@@ -18,11 +18,12 @@ from PySide6.QtGui import QPixmap
 from .core import thumbnail
 from .core.favorites import FavoritesStore
 from .core.image_item import ImageItem
+from .core.oss_service import SHARE_EXPIRES, OssIndex, OssLibrary
 from .core.settings import AppSettings
 from .utils import file_ops
 from .utils.format import human_size
-from .workers.workers import (DecodeWorker, HashWorker, MoveWorker, ScanWorker,
-                              ThumbWorker)
+from .workers.workers import (DecodeWorker, HashWorker, ListWorker, MoveWorker,
+                              ScanWorker, ThumbWorker, UploadWorker)
 
 SORT_MODES = [("random", "随机"), ("time_asc", "时间正序"), ("time_desc", "时间倒序"),
               ("size_asc", "大小正序"), ("size_desc", "大小倒序")]
@@ -96,6 +97,9 @@ class LibraryController(QObject):
         self._warm_pending: set = set()
         self._scroll_restored_for: str | None = None
         self._cancelled = False
+        self.oss: OssLibrary | None = None
+        self.online_mode = False
+        self.oss_index = OssIndex()
 
         # 目录变更监听：防抖后自动重扫
         self._watcher = QFileSystemWatcher(self)
@@ -288,7 +292,8 @@ class LibraryController(QObject):
             self._warm_pending.add(key)
         w = ThumbWorker(self.cache_root, item, tier,
                         with_phash=not bool(item.phash),
-                        is_cancelled=self.is_cancelled)
+                        is_cancelled=self.is_cancelled,
+                        oss=self.oss if item.remote_key else None)
         w.signals.ready.connect(self._on_thumb_ready)
         w.signals.failed.connect(self._on_thumb_failed)
         self._track(w)
@@ -370,6 +375,9 @@ class LibraryController(QObject):
     # ---------------- 垃圾桶 ----------------
     def reload_current(self) -> None:
         """重新扫描当前目录（手动 F5 / 目录变更防抖自动触发）。"""
+        if self.online_mode:
+            self.set_online(True, force=True)
+            return
         if self.root is not None:
             self.status.emit("正在刷新…", 0)
             self.load_directory(self.root, trash=self.trash_mode)
@@ -440,7 +448,8 @@ class LibraryController(QObject):
         return self._by_path.get(path_str)
 
     def request_decode(self, item, callback) -> None:
-        w = DecodeWorker(item, is_cancelled=self.is_cancelled)
+        w = DecodeWorker(item, is_cancelled=self.is_cancelled,
+                         oss=self.oss if item.remote_key else None)
         if callback is not None:
             w.signals.ready.connect(callback)
         w.signals.failed.connect(lambda p, m: self.status.emit(f"原图解码失败：{m}", 3000))
@@ -466,6 +475,130 @@ class LibraryController(QObject):
     def request_cancel(self) -> None:
         """关闭时调用：通知工作线程尽快退出，避免退出期阻塞。"""
         self._cancelled = True
+
+    # ---------------- OSS 在线库 ----------------
+    def oss_configured(self) -> bool:
+        s = self.settings
+        return bool(s.oss_endpoint and s.oss_bucket and s.oss_ak_id
+                    and s.oss_ak_secret)
+
+    def build_oss(self) -> OssLibrary:
+        s = self.settings
+        return OssLibrary(s.oss_endpoint, s.oss_bucket, s.oss_ak_id,
+                          s.oss_ak_secret)
+
+    def set_online(self, on: bool, force: bool = False) -> bool:
+        if on and not force and self.online_mode:
+            return True
+        if not on and not self.online_mode:
+            return True
+        if on:
+            if not self.oss_configured():
+                self.status.emit("请先在「上传到云」中配置 OSS", 5000)
+                return False
+            try:
+                self.oss = self.build_oss()
+            except Exception as exc:
+                self.status.emit(f"OSS 初始化失败：{exc}", 5000)
+                return False
+            self.online_mode = True
+            self.trash_mode = False
+            self._load_seq += 1
+            self._cancelled = False
+            self.root = Path("oss://" + self.settings.oss_bucket)
+            self.cache_root = thumbnail.cache_root_for(
+                Path("oss@" + self.settings.oss_bucket))
+            self.all_items.clear()
+            self._by_path.clear()
+            self._queued.clear()
+            self._pending_thumbs = 0
+            self._scan_finished = False
+            self._dup_done = False
+            self.favorites = None
+            self.delegate.image_root = self.cache_root
+            self._watcher.removePaths(self._watcher.directories())
+            self.status.emit("正在列出在线库…", 0)
+            w = ListWorker(self.oss, is_cancelled=self.is_cancelled)
+            w.signals.batch.connect(self._on_online_batch)
+            w.signals.finished.connect(self._on_online_done)
+            w.signals.failed.connect(
+                lambda m: self.status.emit(f"在线库列表失败：{m}", 5000))
+            self._track(w)
+            self.pool.start(w)
+            return True
+        # 切回本地
+        self.online_mode = False
+        self.oss = None
+        if self.main_root is not None:
+            self.load_directory(self.main_root)
+        return True
+
+    def _on_online_batch(self, rows) -> None:
+        for key, size, mtime, w, h in rows:
+            it = ImageItem(path=Path(key), size_bytes=size,
+                           mtime=float(mtime), width=w, height=h,
+                           remote_key=key)
+            self.all_items.append(it)
+            self._by_path[str(it.path)] = it
+        self.refresh_view()
+        self.status.emit(f"已加载 {len(self.all_items)} 张…", 0)
+
+    def _on_online_done(self, total) -> None:
+        self._scan_finished = True
+        total_size = sum(i.size_bytes for i in self.all_items)
+        self.title_changed.emit(
+            f"千寻图片查看器 — 在线 {total} 张 · 共 {human_size(total_size)}")
+        self.status.emit(f"在线库加载完成：{total} 张", 5000)
+        self.refresh_view()
+        self.scan_done.emit()
+        self._warm_all_thumbs()
+
+    def create_upload_worker(self):
+        """本地模式：生成增量上传任务。返回 (worker, 待传数, 跳过数)。"""
+        if self.online_mode or self.main_root is None:
+            return None, 0, 0
+        if not self.oss_configured():
+            return None, 0, 0
+        oss = self.build_oss()
+        tasks = []
+        skipped = 0
+        for it in self.all_items:
+            if it.remote_key or it.corrupted:
+                continue
+            ck = thumbnail.cache_key(it)
+            if self.oss_index.get(ck):
+                skipped += 1
+                continue
+            try:
+                rel = it.path.resolve().relative_to(
+                    self.main_root.resolve()).as_posix()
+            except ValueError:
+                rel = it.path.name
+            tasks.append((it.path, rel, ck))
+        w = UploadWorker(oss, self.oss_index, tasks,
+                         is_cancelled=self.is_cancelled)
+        self._track(w)
+        return w, len(tasks), skipped
+
+    def share_link(self, item) -> str | None:
+        """返回 ≤7 天签名外链；本地项未上传时返回 None 并提示。"""
+        try:
+            oss = self.oss if self.online_mode else (
+                self.build_oss() if self.oss_configured() else None)
+        except Exception:
+            oss = None
+        if oss is None:
+            self.status.emit("请先配置 OSS", 5000)
+            return None
+        key = item.remote_key
+        if not key:
+            rec = self.oss_index.get(thumbnail.cache_key(item))
+            if not rec:
+                self.status.emit("该图片尚未上传到云，请先「上传到云」", 5000)
+                return None
+            key = rec["key"]
+        return oss.sign(key, SHARE_EXPIRES)
+
     def cache_info(self) -> tuple[int, int]:
         """返回 (文件数, 总字节)。"""
         if self.cache_root is None:

@@ -5,7 +5,7 @@
 > 面向大规模本地图片库（千张级、单张 10~60MB）的高性能 Windows 桌面查看器。
 > 缩略图优先 · 全程异步 · 无损操作 · 云盘友好。
 
-`版本 v1.2.1` · `平台 Windows 10/11 x64` · `Python 3.11+ / PySide6`
+`版本 v1.3.0（测试版）` · `平台 Windows 10/11 x64` · `Python 3.11+ / PySide6`
 
 **作者：羡林i (Y_XianLin)** · 版权所有 © 2026，保留所有权利（详见 [LICENSE](LICENSE)）
 仓库：[Gitee](https://gitee.com/xianlin-i/qianxun-viewer) · 前身：[ImgRandomDisplay](https://gitee.com/xianlin-i/ImgRandomDisplay)
@@ -51,6 +51,7 @@
 - **图片操作**：另存为（Ctrl+S）、复制图片（Ctrl+C）、复制文件、打开所在位置（Ctrl+O）、移出（Del）。
 - **体验细节**：拖拽文件夹加载、空态引导、暗色主题、高 DPI、F11 全屏、2:1 比例提示、窗口/视图状态记忆、单实例保护、目录变更自动/手动刷新（F5）。
 - **云盘/网络盘友好**：缩略图缓存存本地用户目录（不写图片目录、无同步流量）；所有 IO 退避重试，瞬时错误不误判"已损坏"；关窗即退（工作线程取消机制）。
+- **阿里云 OSS 在线库（v1.3.0 测试版）**：「上传到云」增量上传；「在线库」模式浏览云端库（IMG 签名缩略图 + 原图按需）；右键「复制外链」≤7 天签名 URL。设计详见 [docs/ONLINE_DESIGN.md](docs/ONLINE_DESIGN.md)。
 
 ## 环境要求
 

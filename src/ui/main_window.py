@@ -21,6 +21,7 @@ from ..utils.paths import base_dir
 from .cache_dialog import CacheDialog
 from .duplicates_dialog import DuplicatesDialog
 from .grid_view import GridView, ImageModel, ThumbDelegate
+from .oss_dialogs import OssConfigDialog, UploadDialog
 from .pager import PagerBar
 from .settings_dialog import SettingsDialog
 from .viewer import ViewerOverlay
@@ -126,6 +127,13 @@ class MainWindow(QWidget):
         self.btn_trash.setCheckable(True)
         tb.addWidget(self.btn_trash)
 
+        self.btn_upload = QPushButton("上传到云")
+        tb.addWidget(self.btn_upload)
+
+        self.btn_online = QPushButton("在线库")
+        self.btn_online.setCheckable(True)
+        tb.addWidget(self.btn_online)
+
         self.btn_mode = QPushButton("分页模式")
         self.btn_mode.setCheckable(True)
         tb.addWidget(self.btn_mode)
@@ -155,6 +163,9 @@ class MainWindow(QWidget):
         self.btn_about.clicked.connect(self._show_about)
         self.btn_cache.clicked.connect(
             lambda: CacheDialog(self.controller, self).show())
+        self.btn_upload.clicked.connect(
+            lambda: UploadDialog(self.controller, self).show())
+        self.btn_online.toggled.connect(self._on_online_toggled)
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(200)
@@ -244,6 +255,21 @@ class MainWindow(QWidget):
     def _on_slider(self, value: int) -> None:
         self.wall.row_height = value
         self.wall.relayout()
+
+    def _on_online_toggled(self, on: bool) -> None:
+        if on and not self.controller.oss_configured():
+            OssConfigDialog(self.settings, self).exec()
+        if on and not self.controller.oss_configured():
+            self.btn_online.blockSignals(True)
+            self.btn_online.setChecked(False)
+            self.btn_online.blockSignals(False)
+            return
+        ok = self.controller.set_online(on)
+        if not ok:
+            self.btn_online.blockSignals(True)
+            self.btn_online.setChecked(False)
+            self.btn_online.blockSignals(False)
+        self._sync_mode_ui()
 
     def _on_trash_toggled(self, on: bool) -> None:
         self.chk_fav.blockSignals(True)
@@ -400,6 +426,10 @@ class MainWindow(QWidget):
     def _build_menu(self, items) -> tuple:
         menu = QMenu(self)
         acts = {}
+        acts["share"] = menu.addAction("复制外链（7天有效）")
+        if self.controller.online_mode:
+            acts["copy"] = menu.addAction("复制图片")
+            return menu, acts
         if self.controller.trash_mode:
             acts["restore"] = menu.addAction("还原")
             acts["reveal"] = menu.addAction("打开所在位置 (Ctrl+O)")
@@ -417,6 +447,7 @@ class MainWindow(QWidget):
         if act is None:
             return
         dispatch = {
+            "share": lambda: self._copy_share_link(items[0]),
             "fav": lambda: [self.controller.toggle_favorite(i) for i in items],
             "save": lambda: self._save(items[0]),
             "copy": lambda: self.controller.copy_item(items[0]),
@@ -447,6 +478,13 @@ class MainWindow(QWidget):
             self.controller.remove_item(item)
         elif action == "restore":
             self.controller.restore_item(item)
+
+    def _copy_share_link(self, item) -> None:
+        link = self.controller.share_link(item)
+        if link:
+            from PySide6.QtWidgets import QApplication
+            QApplication.clipboard().setText(link)
+            self._status.showMessage("已复制外链（7 天有效）", 3000)
 
     def _save(self, item) -> None:
         if not self.controller.save_item(item):

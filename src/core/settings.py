@@ -107,3 +107,36 @@ class AppSettings:
 
     def sync(self) -> None:
         self._s.sync()
+
+    # ---- OSS 在线配置（仅存本机用户目录） ----
+    @property
+    def oss_endpoint(self) -> str:
+        return self._get("oss_endpoint")
+
+    @oss_endpoint.setter
+    def oss_endpoint(self, v: str) -> None:
+        self._s.setValue("oss_endpoint", v)
+
+    @property
+    def oss_bucket(self) -> str:
+        return self._get("oss_bucket")
+
+    @oss_bucket.setter
+    def oss_bucket(self, v: str) -> None:
+        self._s.setValue("oss_bucket", v)
+
+    @property
+    def oss_ak_id(self) -> str:
+        return self._get("oss_ak_id")
+
+    @oss_ak_id.setter
+    def oss_ak_id(self, v: str) -> None:
+        self._s.setValue("oss_ak_id", v)
+
+    @property
+    def oss_ak_secret(self) -> str:
+        return self._get("oss_ak_secret")
+
+    @oss_ak_secret.setter
+    def oss_ak_secret(self, v: str) -> None:
+        self._s.setValue("oss_ak_secret", v)
