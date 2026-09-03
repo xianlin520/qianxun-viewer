@@ -6,8 +6,9 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel,
-                               QPushButton, QScrollArea, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel,
+                               QMessageBox, QPushButton, QScrollArea,
+                               QGraphicsOpacityEffect, QVBoxLayout, QWidget)
 
 from ..core import thumbnail
 from ..utils.format import human_size, human_time
@@ -24,6 +25,9 @@ class DuplicatesDialog(QDialog):
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
+        hint = QLabel("勾选「排除」跳过误判图片；「保留最大/最新」仅一键处理未排除项。")
+        hint.setStyleSheet("color:#8a8f98;")
+        outer.addWidget(hint)
         scroll = QScrollArea()
         scroll.setWidgetResizable(False)
         scroll.setHorizontalScrollBarPolicy(
@@ -35,6 +39,7 @@ class DuplicatesDialog(QDialog):
         if not groups:
             lay.addWidget(QLabel("未发现疑似重复图片。"))
 
+        self._checks: list[list[QCheckBox]] = []
         for gi, group in enumerate(groups):
             title = QLabel(f"第 {gi + 1} 组（{len(group)} 张）")
             title.setStyleSheet("color:#8ab4f8;font-weight:bold;")
@@ -42,6 +47,7 @@ class DuplicatesDialog(QDialog):
 
             row = QHBoxLayout()
             row.setSpacing(8)
+            checks: list[QCheckBox] = []
             for item in group:
                 cell = QVBoxLayout()
                 lbl = QLabel()
@@ -56,20 +62,31 @@ class DuplicatesDialog(QDialog):
                         Qt.TransformationMode.SmoothTransformation))
                 else:
                     lbl.setText("无预览")
+                eff = QGraphicsOpacityEffect(lbl)
+                lbl.setGraphicsEffect(eff)
                 cell.addWidget(lbl)
                 info = QLabel(f"{item.path.name}\n"
                               f"{human_size(item.size_bytes)} · {human_time(item.mtime)}")
                 info.setFixedWidth(CELL)
                 info.setWordWrap(True)
                 cell.addWidget(info)
+                chk = QCheckBox("排除（非重复）")
+                chk.setStyleSheet("color:#8a8f98;")
+                chk.toggled.connect(
+                    lambda on, e=eff: e.setOpacity(0.3 if on else 1.0))
+                cell.addWidget(chk)
+                checks.append(chk)
                 row.addLayout(cell)
+            self._checks.append(checks)
 
             btns = QVBoxLayout()
             online = self.controller.online_mode
             b1 = QPushButton("保留最大\n其余移出")
-            b1.clicked.connect(lambda _=False, g=group: self._keep(g, "size"))
+            b1.clicked.connect(
+                lambda _=False, g=group, i=gi: self._keep(i, g, "size"))
             b2 = QPushButton("保留最新\n其余移出")
-            b2.clicked.connect(lambda _=False, g=group: self._keep(g, "mtime"))
+            b2.clicked.connect(
+                lambda _=False, g=group, i=gi: self._keep(i, g, "mtime"))
             if online:
                 for b in (b1, b2):
                     b.setToolTip("在线模式：确认后将永久删除云端重复对象（不可逆）")
@@ -117,12 +134,15 @@ class DuplicatesDialog(QDialog):
             return QPixmap(str(out))
         return QPixmap()
 
-    def _keep(self, group, by: str) -> None:
+    def _keep(self, gi: int, group, by: str) -> None:
+        checks = self._checks[gi] if gi < len(self._checks) else []
+        active = [it for it, c in zip(group, checks) if not c.isChecked()]
+        if len(active) < 2:
+            QMessageBox.information(self, "提示",
+                                    "排除后该组不足 2 张，无需处理。")
+            return
         if self.controller.online_mode:
-            from PySide6.QtWidgets import QMessageBox
-            n = len(group) - 1
-            if n <= 0:
-                return
+            n = len(active) - 1
             ans = QMessageBox.question(
                 self, "云端删除确认",
                 f"将永久删除 {n} 张云端重复图片（不可恢复），\n"
@@ -131,4 +151,4 @@ class DuplicatesDialog(QDialog):
                 QMessageBox.StandardButton.No)
             if ans != QMessageBox.StandardButton.Yes:
                 return
-        self.controller.keep_one(group, by)
+        self.controller.keep_one(active, by)

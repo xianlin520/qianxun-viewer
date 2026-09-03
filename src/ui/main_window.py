@@ -7,11 +7,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QKeySequence, QShortcut, QIcon
+from PySide6.QtGui import QKeySequence, QShortcut, QIcon, QActionGroup
 from PySide6.QtWidgets import (QComboBox, QFileDialog, QLabel,
                                QLineEdit, QMenu, QMessageBox, QPushButton,
                                QSlider, QStatusBar, QToolBar, QVBoxLayout,
-                               QWidget, QWidgetAction)
+                               QWidget)
 
 from .. import meta
 from ..controllers import ASPECT_PRESETS, SORT_MODES, LibraryController
@@ -108,7 +108,6 @@ class MainWindow(QWidget):
         self.combo_folder = QComboBox()
         self.combo_folder.setFixedWidth(140)
         self.combo_folder.setToolTip("按子文件夹筛选（含其子树）")
-        self.combo_folder.setVisible(False)   # 有子文件夹时才显示
         tb.addWidget(self.combo_folder)
 
         self.btn_mode = QPushButton("分页模式")
@@ -128,15 +127,18 @@ class MainWindow(QWidget):
         self.act_dup = self.menu_more.addAction("查找重复")
         self.act_fav = self.menu_more.addAction("仅看最爱")
         self.act_fav.setCheckable(True)
-        wa = QWidgetAction(self.menu_more)
-        self.combo_aspect = QComboBox()
-        self.combo_aspect.setEditable(True)
-        self.combo_aspect.addItems(ASPECT_PRESETS)
-        self.combo_aspect.setFixedWidth(120)
-        self.combo_aspect.setToolTip("按长宽比筛选（整体符合即可，±10%），\n"
-                                     "可自定义如 1.5:3")
-        wa.setDefaultWidget(self.combo_aspect)
-        self.menu_more.addAction(wa)
+        self.menu_aspect = self.menu_more.addMenu("长宽比筛选")
+        self._aspect_group = QActionGroup(self)
+        self._aspect_group.setExclusive(True)
+        for p in ASPECT_PRESETS:
+            a = self.menu_aspect.addAction(p)
+            a.setCheckable(True)
+            self._aspect_group.addAction(a)
+            a.triggered.connect(lambda _=False, t=p: self._apply_aspect(t))
+        self.menu_aspect.addSeparator()
+        self._aspect_custom_act = None
+        self.menu_aspect.addAction("自定义…").triggered.connect(
+            self._custom_aspect)
         self.menu_more.addSeparator()
         self.act_trash = self.menu_more.addAction("垃圾桶")
         self.act_trash.setCheckable(True)
@@ -174,15 +176,6 @@ class MainWindow(QWidget):
         self._search_timer.timeout.connect(
             lambda: self.controller.set_filter(self.edit_search.text()))
         self.edit_search.textChanged.connect(lambda _t: self._search_timer.start())
-        self._aspect_timer = QTimer(self)
-        self._aspect_timer.setSingleShot(True)
-        self._aspect_timer.setInterval(200)
-        self._aspect_timer.timeout.connect(
-            lambda: self.controller.set_aspect(self.combo_aspect.currentText()))
-        self.combo_aspect.currentTextChanged.connect(
-            lambda _t: self._aspect_timer.start())
-        self.combo_aspect.currentTextChanged.connect(
-            lambda _t: self._sync_more_badge())
         self.combo_folder.currentIndexChanged.connect(self._on_folder_changed)
         self.controller.scan_done.connect(self._refresh_folders)
 
@@ -278,16 +271,43 @@ class MainWindow(QWidget):
         i = self.combo_folder.findText(cur)
         self.combo_folder.setCurrentIndex(i if i >= 0 else 0)
         self.combo_folder.blockSignals(False)
-        self.combo_folder.setVisible(self.combo_folder.count() > 1)
         if i > 0:
             self.controller.set_folder_filter(cur)
 
     def _sync_more_badge(self) -> None:
         """「更多」按钮上以 ● 提示菜单内有生效中的状态。"""
+        act = self._aspect_group.checkedAction()
+        aspect_on = act is not None and act.text() not in ("", ASPECT_PRESETS[0])
         active = (self.act_fav.isChecked() or self.act_trash.isChecked()
-                  or self.combo_aspect.currentText().strip()
-                  not in ("", ASPECT_PRESETS[0]))
+                  or aspect_on)
         self.btn_more.setText("更多 ●" if active else "更多 ▾")
+
+    def _apply_aspect(self, text: str) -> None:
+        self.controller.set_aspect(text)
+        self._sync_more_badge()
+
+    def _custom_aspect(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        cur = ""
+        if self._aspect_custom_act is not None:
+            cur = self._aspect_custom_act.text().replace("自定义 ", "")
+        text, ok = QInputDialog.getText(
+            self, "自定义长宽比",
+            "输入比例如 1.5:3，或单个浮点（宽÷高）：", text=cur)
+        if not ok or not text.strip():
+            return
+        t = text.strip()
+        if self._aspect_custom_act is None:
+            a = self.menu_aspect.addAction("")
+            a.setCheckable(True)
+            self._aspect_group.addAction(a)
+            a.triggered.connect(
+                lambda _=False: self._apply_aspect(
+                    self._aspect_custom_act.text().replace("自定义 ", "")))
+            self._aspect_custom_act = a
+        self._aspect_custom_act.setText(f"自定义 {t}")
+        self._aspect_custom_act.setChecked(True)
+        self._apply_aspect(t)
 
     def _on_online_toggled(self, on: bool) -> None:
         if on and not self.controller.oss_configured():
