@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSettings
 
+from ..utils import secret
+
 ORG_NAME = "QianXun"
 APP_NAME = "QianXunViewer"
 
@@ -14,6 +16,7 @@ class AppSettings:
     def __init__(self) -> None:
         self._s = QSettings(QSettings.Format.IniFormat, QSettings.Scope.UserScope,
                             ORG_NAME, APP_NAME)
+        self._migrate_secret()
 
     def _get(self, key: str, default: str = "") -> str:
         v = self._s.value(key)
@@ -108,6 +111,13 @@ class AppSettings:
     def sync(self) -> None:
         self._s.sync()
 
+    def _migrate_secret(self) -> None:
+        """历史版本 SK 为明文：启动时一次性改写为 DPAPI 密文。"""
+        raw = self._s.value("oss_ak_secret")
+        if raw and not str(raw).startswith(secret.PREFIX):
+            self._s.setValue("oss_ak_secret", secret.protect(str(raw)))
+            self._s.sync()
+
     # ---- OSS 在线配置（仅存本机用户目录） ----
     @property
     def oss_endpoint(self) -> str:
@@ -135,11 +145,11 @@ class AppSettings:
 
     @property
     def oss_ak_secret(self) -> str:
-        return self._get("oss_ak_secret")
+        return secret.unprotect(self._get("oss_ak_secret"))
 
     @oss_ak_secret.setter
     def oss_ak_secret(self, v: str) -> None:
-        self._s.setValue("oss_ak_secret", v)
+        self._s.setValue("oss_ak_secret", secret.protect(v))
 
     # ---- 行为设置 ----
     @property

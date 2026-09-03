@@ -21,7 +21,7 @@
   │           原图   = 签名URL 按需下载到本地临时 → 复用 DecodeWorker
   │ P3 分享:  右键"复制外链" = ≤7天签名URL；"复制永久链接" = 单对象公共读直链（可撤回）
   └ 索引: %LOCALAPPDATA%/QianXunViewer/oss_index.json (relpath→key/size/mtime)
-安全: AK/SK 仅存本机 QSettings(INI, 用户目录)；签名过期≤7天；可选 RAM 子账号最小权限
+安全: 配置仅存本机 QSettings(INI, 用户目录)，其中 SK 用 Windows DPAPI 加密（绑定当前 Windows 账户，密文拷到其他机器/账户无法解出）；历史明文配置启动时自动迁移为密文；签名过期≤7天；可选 RAM 子账号最小权限
 ```
 
 ## 3. 关键决策
