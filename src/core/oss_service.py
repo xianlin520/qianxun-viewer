@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+from urllib.parse import quote
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -117,6 +118,25 @@ class OssLibrary:
         params = {"x-oss-process": self._process(thumb)} if thumb else None
         return self.bucket.sign_url("GET", key, expires, params=params,
                                     slash_safe=True)
+
+    def public_url(self, key: str) -> str:
+        """对象公共读后的永久直链（需先 make_public）。"""
+        host = self.bucket.endpoint.split("//", 1)[-1].rstrip("/")
+        return f"https://{self.bucket_name}.{host}/{quote(key, safe='/')}"
+
+    def make_public(self, key: str) -> None:
+        """单个对象设为公共读（桶可保持私有）。"""
+        self.bucket.put_object_acl(key, self._oss2.OBJECT_ACL_PUBLIC_READ)
+
+    def revoke_public(self, key: str) -> None:
+        """撤回公共读（对象 ACL 恢复继承桶权限）。"""
+        self.bucket.put_object_acl(key, self._oss2.OBJECT_ACL_DEFAULT)
+
+    def is_public(self, key: str) -> bool:
+        try:
+            return self.bucket.get_object_acl(key).acl == "public-read"
+        except Exception:
+            return False
 
     def download_to(self, key: str, dest: Path, thumb: int = 0) -> None:
         self.bucket.get_object_to_file(key, str(dest),

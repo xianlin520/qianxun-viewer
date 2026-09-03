@@ -631,16 +631,8 @@ class LibraryController(QObject):
         self._track(w)
         return w, len(tasks), skipped
 
-    def share_link(self, item) -> str | None:
-        """返回 ≤7 天签名外链；本地项未上传时返回 None 并提示。"""
-        try:
-            oss = self.oss if self.online_mode else (
-                self.build_oss() if self.oss_configured() else None)
-        except Exception:
-            oss = None
-        if oss is None:
-            self.status.emit("请先配置 OSS", 5000)
-            return None
+    def _share_key(self, item):
+        """返回对象 key；本地项未上传时提示并返回 None。"""
         key = item.remote_key
         if not key:
             rec = self.oss_index.get(thumbnail.cache_key(item))
@@ -648,7 +640,45 @@ class LibraryController(QObject):
                 self.status.emit("该图片尚未上传到云，请先「上传到云」", 5000)
                 return None
             key = rec["key"]
+        return key
+
+    def _share_oss(self):
+        try:
+            return self.oss if self.online_mode else (
+                self.build_oss() if self.oss_configured() else None)
+        except Exception:
+            return None
+
+    def share_link(self, item, permanent: bool = False) -> str | None:
+        """签名外链（≤7 天）；permanent=True 时对象设公共读，返回永久直链。"""
+        oss = self._share_oss()
+        if oss is None:
+            self.status.emit("请先配置 OSS", 5000)
+            return None
+        key = self._share_key(item)
+        if not key:
+            return None
+        if permanent:
+            try:
+                oss.make_public(key)
+                return oss.public_url(key)
+            except Exception as exc:
+                self.status.emit(f"设置公共读失败：{exc}", 5000)
+                return None
         return oss.sign(key, self.settings.share_days * 24 * 3600)
+
+    def revoke_share(self, item) -> bool:
+        """撤回永久公开（对象恢复继承桶私有）。"""
+        oss = self._share_oss()
+        key = self._share_key(item) if oss else None
+        if not oss or not key:
+            return False
+        try:
+            oss.revoke_public(key)
+            return True
+        except Exception as exc:
+            self.status.emit(f"撤回公共读失败：{exc}", 5000)
+            return False
 
     def cache_info(self) -> tuple[int, int]:
         """返回 (文件数, 总字节)。"""

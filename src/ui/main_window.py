@@ -455,7 +455,9 @@ class MainWindow(QWidget):
     def _build_menu(self, items) -> tuple:
         menu = QMenu(self)
         acts = {}
-        acts["share"] = menu.addAction("复制外链（7天有效）")
+        acts["share"] = menu.addAction("复制外链（限时签名）")
+        acts["share_perm"] = menu.addAction("复制永久链接（对象公共读）")
+        acts["revoke_perm"] = menu.addAction("撤回永久公开")
         if self.controller.online_mode:
             acts["copy"] = menu.addAction("复制图片")
             return menu, acts
@@ -477,6 +479,8 @@ class MainWindow(QWidget):
             return
         dispatch = {
             "share": lambda: self._copy_share_link(items[0]),
+            "share_perm": lambda: self._copy_share_link(items[0], True),
+            "revoke_perm": lambda: self._revoke_share(items[0]),
             "fav": lambda: [self.controller.toggle_favorite(i) for i in items],
             "save": lambda: self._save(items[0]),
             "copy": lambda: self.controller.copy_item(items[0]),
@@ -508,12 +512,18 @@ class MainWindow(QWidget):
         elif action == "restore":
             self.controller.restore_item(item)
 
-    def _copy_share_link(self, item) -> None:
-        link = self.controller.share_link(item)
+    def _copy_share_link(self, item, permanent: bool = False) -> None:
+        link = self.controller.share_link(item, permanent)
         if link:
             from PySide6.QtWidgets import QApplication
             QApplication.clipboard().setText(link)
-            self._status.showMessage("已复制外链（7 天有效）", 3000)
+            msg = ("已复制永久链接（对象已设公共读）" if permanent
+                   else "已复制签名外链（限时有效）")
+            self._status.showMessage(msg, 3000)
+
+    def _revoke_share(self, item) -> None:
+        if self.controller.revoke_share(item):
+            self._status.showMessage("已撤回永久公开（恢复私有）", 3000)
 
     def _save(self, item) -> None:
         if not self.controller.save_item(item):
