@@ -132,18 +132,61 @@ class DecodeWorker(QRunnable):
 
 class HashSignals(QObject):
     finished = Signal(list)   # 重复组 list[list[ImageItem]]
+    progress = Signal(int, int)   # 补指纹进度 已完成, 总数
+    failed = Signal(str)
 
 
 class HashWorker(QRunnable):
-    def __init__(self, items, threshold: int = 4):
+    """pHash 比对；缺指纹项先补算（本地生成/在线下载缩略图）。"""
+
+    def __init__(self, items, threshold: int = 4, image_root=None,
+                 oss=None, is_cancelled=None):
         super().__init__()
         self.items = items
         self.threshold = threshold
+        self.image_root = image_root
+        self.oss = oss
+        self.is_cancelled = is_cancelled
         self.signals = HashSignals()
 
+    def _fill_phash(self, item) -> str:
+        # 1) 已有缩略图缓存：直接算指纹（本地/在线通用）
+        if self.image_root is not None:
+            for tier in (256, 512):
+                fp = thumbnail.thumb_path(self.image_root, item, tier)
+                if fp.exists():
+                    ph = thumbnail.phash_of_file(fp)
+                    if ph:
+                        return ph
+        # 2) 在线项：下载 OSS IMG 256 档缩略图后算（顺带落缓存）
+        if item.remote_key and self.oss is not None and self.image_root is not None:
+            out = thumbnail.thumb_path(self.image_root, item, 256)
+            try:
+                out.parent.mkdir(parents=True, exist_ok=True)
+                self.oss.download_to(item.remote_key, out, thumb=256)
+                return thumbnail.phash_of_file(out)
+            except Exception:
+                return ""
+        # 3) 本地项：生成 256 档缩略图并算指纹（顺带落缓存）
+        if not item.remote_key and self.image_root is not None:
+            _, ph = thumbnail.generate(self.image_root, item, 256, True)
+            return ph
+        return ""
+
     def run(self):
-        _emit(self.signals.finished,
-              duplicates.find_groups(self.items, self.threshold))
+        try:
+            todo = [it for it in self.items if not it.phash and not it.corrupted]
+            for i, it in enumerate(todo):
+                if self.is_cancelled and self.is_cancelled():
+                    return
+                ph = self._fill_phash(it)
+                if ph:
+                    it.phash = ph
+                _emit(self.signals.progress, i + 1, len(todo))
+            _emit(self.signals.finished,
+                  duplicates.find_groups(self.items, self.threshold))
+        except Exception as exc:
+            _emit(self.signals.failed, str(exc))
 
 
 class ListSignals(QObject):

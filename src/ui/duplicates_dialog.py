@@ -65,10 +65,16 @@ class DuplicatesDialog(QDialog):
                 row.addLayout(cell)
 
             btns = QVBoxLayout()
+            online = self.controller.online_mode
             b1 = QPushButton("保留最大\n其余移出")
             b1.clicked.connect(lambda _=False, g=group: self._keep(g, "size"))
             b2 = QPushButton("保留最新\n其余移出")
             b2.clicked.connect(lambda _=False, g=group: self._keep(g, "mtime"))
+            if online:
+                hint = "在线模式仅供比对，\n云端删除请到 OSS 控制台"
+                for b in (b1, b2):
+                    b.setEnabled(False)
+                    b.setToolTip(hint)
             btns.addWidget(b1)
             btns.addWidget(b2)
             btns.addStretch(1)
@@ -95,7 +101,8 @@ class DuplicatesDialog(QDialog):
         self.accept()
 
     def _preview(self, item) -> QPixmap:
-        """优先复用任意档位本地缓存；均无时同步生成 256 档兜底。"""
+        """优先复用任意档位本地缓存；本地项无缓存时生成 256 档兜底。
+        在线项只读缓存（无本地文件，不尝试读伪路径）。"""
         root = self.controller.cache_root or self.controller.root
         if root is None:
             return QPixmap()
@@ -105,6 +112,8 @@ class DuplicatesDialog(QDialog):
                 pix = QPixmap(str(fp))
                 if not pix.isNull():
                     return pix
+        if item.remote_key:
+            return QPixmap()
         out, _ph = thumbnail.generate(root, item, 256)
         if out is not None:
             return QPixmap(str(out))

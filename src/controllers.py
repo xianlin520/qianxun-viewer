@@ -393,6 +393,9 @@ class LibraryController(QObject):
 
     # ---------------- 图片操作 ----------------
     def remove_item(self, item) -> None:
+        if self.online_mode or item.remote_key:
+            self.status.emit("在线模式不支持移出，云端删除请到 OSS 控制台操作", 5000)
+            return
         w = MoveWorker(item.path, self.main_root or self.root)
         w.signals.finished.connect(self._on_moved)
         w.signals.failed.connect(lambda p, m: self.status.emit(f"移出失败：{m}", 5000))
@@ -440,7 +443,10 @@ class LibraryController(QObject):
         self.status.emit(f"已还原：{Path(dst).name}", 3000)
 
     def keep_one(self, group, by: str) -> None:
-        """重复组一键保留：by = 'size' | 'mtime'，其余移出。"""
+        """重复组一键保留：by = 'size' | 'mtime'，其余移出。仅本地模式。"""
+        if self.online_mode:
+            self.status.emit("在线模式仅供查重比对，云端删除请到 OSS 控制台", 5000)
+            return
         keep = max(group, key=lambda i: i.size_bytes if by == "size" else i.mtime)
         for it in group:
             if it is not keep:
@@ -498,8 +504,15 @@ class LibraryController(QObject):
         self.run_dup_detect()
 
     def run_dup_detect(self) -> None:
-        w = HashWorker(self.all_items, self.settings.dup_threshold)
+        w = HashWorker(self.all_items, self.settings.dup_threshold,
+                       image_root=self.cache_root,
+                       oss=self.oss if self.online_mode else None,
+                       is_cancelled=self.is_cancelled)
         w.signals.finished.connect(self._on_dups)
+        w.signals.progress.connect(
+            lambda d, t: self.status.emit(f"正在计算指纹 {d}/{t}…", 0))
+        w.signals.failed.connect(
+            lambda m: self.status.emit(f"查重失败：{m}", 5000))
         self._track(w)
         self.pool.start(w)
 
