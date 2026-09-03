@@ -1,6 +1,40 @@
 # 用户指南
 
-千寻图片查看器 v1.0.0 · 版权所有 © 羡林i (Y_XianLin)
+千寻图片查看器 v1.3.0 · 版权所有 © 羡林i (Y_XianLin)
+
+## 0. 界面速览
+
+启动闪屏 → 主窗体：
+
+![闪屏](images/00_splash.png)
+
+图片墙（默认）与多选：
+
+![图片墙](images/01_wall.png)
+
+![多选](images/01b_wall_multisel.png)
+
+分页模式（卡片按钮行）：
+
+![分页](images/02_page.png)
+
+大图浏览器：
+
+![大图](images/03_viewer.png)
+
+重复面板 / 垃圾桶 / 缓存 / 上传 / 设置 / 在线库：
+
+![重复](images/04_duplicates.png)
+
+![垃圾桶](images/05_trash.png)
+
+![缓存](images/06_cache.png)
+
+![上传](images/07_upload.png)
+
+![设置](images/08_settings.png)
+
+![在线库](images/09_online.png)
 
 ## 1. 启动与加载图片
 
