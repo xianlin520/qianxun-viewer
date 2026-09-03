@@ -1,6 +1,6 @@
 # 在线图片查看设计（阿里云 OSS 方案）
 
-千寻图片查看器 v1.3.0+ · 版权所有 © 羡林i (Y_XianLin)
+千寻图片查看器 v1.4.0 · 版权所有 © 羡林i (Y_XianLin)
 
 ## 1. 选型结论
 
@@ -51,5 +51,5 @@
 
 ## 7. 状态
 
-- v1.3.0 为测试版：P1/P2/P3 代码完成并 Fake 验证；仅本地提交，不推送 Gitee、不发发行版。
+- v1.4.0 正式版：P1/P2/P3 全功能 + 测试期增量（分享双模式/在线查重/DPAPI/启动优化）随正式版发布。
 - API 用法对齐官方文档：`sign_url(params=x-oss-process)`、`get_object_to_file(process=…)`、`resumable_upload`、`image/info` 取宽高。

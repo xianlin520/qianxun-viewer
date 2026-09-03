@@ -1,6 +1,6 @@
 # 用户指南
 
-千寻图片查看器 v1.3.0 · 版权所有 © 羡林i (Y_XianLin)
+千寻图片查看器 v1.4.0 · 版权所有 © 羡林i (Y_XianLin)
 
 ## 0. 界面速览
 
@@ -131,7 +131,7 @@
 - 「更多」→「关于」：版本与版权信息（羡林i / Y_XianLin）。
 - `F11` 全屏；窗口比例远离 2:1 时状态栏给出一次提示。
 
-## 10. 在线库（阿里云 OSS，v1.3.0 测试版）
+## 10. 在线库（阿里云 OSS）
 
 - **配置**：「更多」→「上传到云」→「配置 OSS」，填 Endpoint、Bucket、AccessKey ID/Secret；「测试连接」验证后保存。配置仅存本机用户目录（`%APPDATA%\QianXun\QianXunViewer.ini`），其中 **Secret 用 Windows DPAPI 加密**（绑定当前 Windows 账户，不会明文落盘、不上传不外传）。
   - Endpoint 默认用直连域名（如 `https://oss-cn-qingdao.aliyuncs.com`，同地域快且流量便宜）；
