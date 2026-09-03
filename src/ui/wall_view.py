@@ -27,6 +27,8 @@ class WallView(QAbstractScrollArea):
         self.row_height = 180
         self.image_root = None
         self._focus = -1
+        self.selection: set[int] = set()   # 多选集合（Ctrl/Shift）
+        self._anchor: int | None = None
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         # 视口上的滚轮事件不会走到子类的 wheelEvent，
@@ -43,6 +45,8 @@ class WallView(QAbstractScrollArea):
         self._items = list(items)
         if self._focus >= len(self._items):
             self._focus = -1
+        self.selection.clear()
+        self._anchor = None
         self.relayout()
         self.update()
 
@@ -142,11 +146,38 @@ class WallView(QAbstractScrollArea):
     def mousePressEvent(self, e) -> None:
         if e.button() == Qt.MouseButton.LeftButton:
             idx = self.index_at(e.position())
-            if idx >= 0:
-                self._focus = idx
+            mods = e.modifiers()
+            if idx < 0:                      # 点空白清除选择
+                self.selection.clear()
+                self._anchor = None
                 self.update()
-                self.item_clicked.emit(idx)
                 return
+            if mods & Qt.KeyboardModifier.ControlModifier:
+                if idx in self.selection:
+                    self.selection.discard(idx)
+                else:
+                    self.selection.add(idx)
+                self._anchor = idx
+                self.update()
+                return
+            if mods & Qt.KeyboardModifier.ShiftModifier \
+                    and self._anchor is not None:
+                a, b = sorted((self._anchor, idx))
+                self.selection = set(range(a, b + 1))
+                self.update()
+                return
+            self.selection = {idx}
+            self._anchor = idx
+            self._focus = idx
+            self.update()
+            self.item_clicked.emit(idx)
+            return
+        if e.button() == Qt.MouseButton.RightButton:
+            idx = self.index_at(e.position())
+            if idx >= 0 and idx not in self.selection:
+                self.selection = {idx}
+                self._anchor = idx
+                self.update()
         super().mousePressEvent(e)
 
     def keyPressEvent(self, e) -> None:
@@ -266,5 +297,11 @@ class WallView(QAbstractScrollArea):
                 p.setPen(QColor("#8ab4f8"))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(cell.adjusted(1, 1, -1, -1))
+                p.setPen(pen)
+            if idx in self.selection:
+                pen = p.pen()
+                p.setPen(QColor("#ffd54f"))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRect(cell.adjusted(2, 2, -2, -2))
                 p.setPen(pen)
         p.end()

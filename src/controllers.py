@@ -91,6 +91,7 @@ class LibraryController(QObject):
         self._active: set = set()   # 持有 worker 引用，防止运行期间被 GC
         self._load_seq = 0          # 加载世代令牌：切换目录后旧扫描结果作废
         self.filter_text = ""       # 文件名搜索过滤
+        self.folder_filter = ""     # 子文件夹筛选（子树前缀匹配）
         self.aspect_target: float | None = None   # 长宽比筛选
         self._warm_queue: deque = deque()
         self._warm_active = 0
@@ -181,6 +182,11 @@ class LibraryController(QObject):
         if self.filter_text:
             kw = self.filter_text.lower()
             items = [i for i in items if kw in i.path.name.lower()]
+        if self.folder_filter:
+            ff = self.folder_filter
+            items = [i for i in items
+                     if self._item_folder(i) == ff
+                     or self._item_folder(i).startswith(ff + "/")]
         if self.aspect_target is not None:
             t = self.aspect_target
             items = [i for i in items
@@ -195,6 +201,34 @@ class LibraryController(QObject):
 
     def set_aspect(self, text: str) -> None:
         self.aspect_target = parse_aspect(text)
+        self.refresh_view()
+
+    # ---------------- 子文件夹筛选 ----------------
+    def _item_folder(self, item) -> str:
+        """返回项的相对父目录（posix）；在线项用 object key 父路径。"""
+        if item.remote_key:
+            return "/".join(item.remote_key.split("/")[:-1])
+        base = self.main_root if not self.online_mode else None
+        if base is not None:
+            try:
+                return item.path.resolve().relative_to(
+                    base.resolve()).parent.as_posix()
+            except ValueError:
+                return ""
+        return ""
+
+    def available_folders(self) -> list:
+        """所有相对父目录及其祖先，排序返回。"""
+        folders: set[str] = set()
+        for it in self.all_items:
+            f = self._item_folder(it)
+            while f and f != ".":
+                folders.add(f)
+                f = f.rsplit("/", 1)[0] if "/" in f else ""
+        return sorted(f for f in folders if f and f != ".")
+
+    def set_folder_filter(self, folder: str) -> None:
+        self.folder_filter = (folder or "").strip()
         self.refresh_view()
 
     def _sort(self, items):

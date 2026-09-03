@@ -123,6 +123,11 @@ class MainWindow(QWidget):
                                      "可自定义如 1.5:3")
         tb.addWidget(self.combo_aspect)
 
+        self.combo_folder = QComboBox()
+        self.combo_folder.setFixedWidth(140)
+        self.combo_folder.setToolTip("按子文件夹筛选（含其子树）")
+        tb.addWidget(self.combo_folder)
+
         self.btn_trash = QPushButton("垃圾桶")
         self.btn_trash.setCheckable(True)
         tb.addWidget(self.btn_trash)
@@ -179,6 +184,8 @@ class MainWindow(QWidget):
             lambda: self.controller.set_aspect(self.combo_aspect.currentText()))
         self.combo_aspect.currentTextChanged.connect(
             lambda _t: self._aspect_timer.start())
+        self.combo_folder.currentIndexChanged.connect(self._on_folder_changed)
+        self.controller.scan_done.connect(self._refresh_folders)
 
         self.view.visible_range_changed.connect(self.controller.ensure_visible_thumbs)
         self.view.geometry_changed.connect(self.controller.on_view_resized)
@@ -255,6 +262,24 @@ class MainWindow(QWidget):
     def _on_slider(self, value: int) -> None:
         self.wall.row_height = value
         self.wall.relayout()
+
+    def _on_folder_changed(self, idx: int) -> None:
+        if idx <= 0:
+            self.controller.set_folder_filter("")
+        else:
+            self.controller.set_folder_filter(self.combo_folder.currentText())
+
+    def _refresh_folders(self) -> None:
+        cur = self.combo_folder.currentText()
+        self.combo_folder.blockSignals(True)
+        self.combo_folder.clear()
+        self.combo_folder.addItem("全部文件夹")
+        self.combo_folder.addItems(self.controller.available_folders())
+        i = self.combo_folder.findText(cur)
+        self.combo_folder.setCurrentIndex(i if i >= 0 else 0)
+        self.combo_folder.blockSignals(False)
+        if i > 0:
+            self.controller.set_folder_filter(cur)
 
     def _on_online_toggled(self, on: bool) -> None:
         if on and not self.controller.oss_configured():
@@ -384,9 +409,12 @@ class MainWindow(QWidget):
         SettingsDialog(self.settings, self).exec()
 
     def _selected_items(self) -> list:
-        rows = sorted({i.row() for i in self.view.selectedIndexes()})
-        items = self.model.items()
-        return [items[r] for r in rows if r < len(items)]
+        if self.controller.view_mode == "page":
+            rows = sorted({i.row() for i in self.view.selectedIndexes()})
+            items = self.model.items()
+            return [items[r] for r in rows if r < len(items)]
+        vi = self.controller.view_items
+        return [vi[i] for i in sorted(self.wall.selection) if i < len(vi)]
 
     def _on_pressed(self, index) -> None:
         self._click_was_selected = index.row() in {
@@ -419,7 +447,7 @@ class MainWindow(QWidget):
         idx = self.wall.index_at(pos)
         if idx < 0 or idx >= len(self.controller.view_items):
             return
-        items = [self.controller.view_items[idx]]
+        items = self._selected_items() or [self.controller.view_items[idx]]
         menu, acts = self._build_menu(items)
         self._run_menu_action(menu.exec(self.wall.mapToGlobal(pos)), acts, items)
 
