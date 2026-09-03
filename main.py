@@ -14,12 +14,24 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("QianXunViewer")
     app.setOrganizationName("QianXun")
-    app.setStyle("Fusion")
 
     from src import meta
     from src.utils.paths import base_dir
 
-    # 单实例保护（QtNetwork 轻量）：已有实例则激活并退出
+    # 启动画面第一优先：Logo 尽快上屏，其余全部后置
+    logo = QPixmap(str(base_dir() / "assets" / "logo.png"))
+    splash = QSplashScreen(logo.scaled(
+        220, 220, Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation))
+    splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+    splash.showMessage(
+        f"千寻图片查看器 v{meta.VERSION} 启动中…",
+        Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
+        Qt.GlobalColor.darkGray)
+    splash.show()
+    app.processEvents()
+
+    # 单实例保护：已有实例则激活并退出（闪屏已上屏后再做）
     from PySide6.QtNetwork import QLocalServer, QLocalSocket
     key = "QianXunViewer-SingleInstance"
     sock = QLocalSocket()
@@ -33,18 +45,7 @@ def main() -> int:
     server = QLocalServer()
     server.listen(key)
 
-    # 启动画面：Logo + 版本，立即显示
-    logo = QPixmap(str(base_dir() / "assets" / "logo.png"))
-    splash = QSplashScreen(logo.scaled(
-        220, 220, Qt.AspectRatioMode.KeepAspectRatio,
-        Qt.TransformationMode.SmoothTransformation))
-    splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-    splash.showMessage(
-        f"千寻图片查看器 v{meta.VERSION} 启动中…",
-        Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
-        Qt.GlobalColor.darkGray)
-    splash.show()
-    app.processEvents()
+    app.setStyle("Fusion")
 
     app.setApplicationVersion(meta.VERSION)
     QPixmapCache.setCacheLimit(300 * 1024)  # KB：网格缩略图 QPixmap 内存缓存上限
