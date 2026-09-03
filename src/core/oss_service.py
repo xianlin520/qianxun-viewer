@@ -77,6 +77,13 @@ class OssLibrary:
         except Exception:
             return False
 
+    def list_keys(self) -> set:
+        """一次列举全部对象 key（上传前去重用）。"""
+        try:
+            return {o.key for o in self._oss2.ObjectIterator(self.bucket)}
+        except Exception:
+            return set()
+
     def list_images(self, max_workers: int = 8) -> list:
         """返回 [(key, size, last_modified, width, height)]。
 

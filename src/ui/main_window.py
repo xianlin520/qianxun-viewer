@@ -364,7 +364,8 @@ class MainWindow(QWidget):
 
         self.controller.page = s.last_page
         self._sync_mode_ui()
-        start = s.default_open_dir or s.last_dir
+        start = s.default_open_dir or (
+            s.last_dir if s.auto_load_last else "")
         if start and Path(start).is_dir():
             self.controller.load_directory(Path(start))
 

@@ -110,6 +110,8 @@ class UploadDialog(QDialog):
             lambda d, t, n: (self.bar.setValue(d),
                              self.lbl.setText(f"上传 {d}/{t}：{n}")))
         w.signals.finished.connect(
-            lambda up: (self.bar.setValue(self.bar.maximum()),
-                        self.lbl.setText(f"完成：新传 {up}，跳过已传 {skipped}")))
+            lambda up, fd: (self.bar.setValue(self.bar.maximum()),
+                            self.lbl.setText(
+                                f"完成：新传 {up}，跳过已传 {skipped}"
+                                + (f"，失败 {fd}" if fd else ""))))
         self.controller.pool.start(w)

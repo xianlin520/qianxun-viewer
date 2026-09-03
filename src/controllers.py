@@ -141,7 +141,8 @@ class LibraryController(QObject):
         self._watcher.removePaths(self._watcher.directories())
         self._watcher.addPath(str(path))
         self.status.emit(f"正在扫描 {path} …", 0)
-        w = ScanWorker(path, is_cancelled=self.is_cancelled)
+        w = ScanWorker(path, is_cancelled=self.is_cancelled,
+                       parallel=self.settings.scan_parallel)
         w.signals.batch.connect(lambda b, e, s=seq: self._on_batch(b, e, s))
         w.signals.finished.connect(lambda t, e, s=seq: self._on_scan_done(t, e, s))
         w.signals.failed.connect(lambda m: self.status.emit(f"扫描失败：{m}", 5000))
@@ -588,29 +589,45 @@ class LibraryController(QObject):
         self._warm_all_thumbs()
 
     def create_upload_worker(self):
-        """本地模式：生成增量上传任务。返回 (worker, 待传数, 跳过数)。"""
+        """本地模式：生成增量上传任务。返回 (worker, 待传数, 跳过数)。
+
+        跳过三类：本地索引已传、云端已存在（一次列举）、
+        批内同内容重复（size+pHash 相同且设置开启时）。"""
         if self.online_mode or self.main_root is None:
             return None, 0, 0
         if not self.oss_configured():
             return None, 0, 0
         oss = self.build_oss()
+        existing = oss.list_keys()
+        skip_dups = self.settings.upload_skip_dups
         tasks = []
         skipped = 0
+        seen: dict[tuple, bool] = {}
         for it in self.all_items:
             if it.remote_key or it.corrupted:
                 continue
             ck = thumbnail.cache_key(it)
-            if self.oss_index.get(ck):
-                skipped += 1
-                continue
+            rel = None
             try:
                 rel = it.path.resolve().relative_to(
                     self.main_root.resolve()).as_posix()
             except ValueError:
                 rel = it.path.name
+            if self.oss_index.get(ck) or OssIndex.make_key(rel) in existing:
+                if skip_dups and it.phash:
+                    seen[(it.size_bytes, it.phash)] = True
+                skipped += 1
+                continue
+            if skip_dups and it.phash:
+                ident = (it.size_bytes, it.phash)
+                if ident in seen:
+                    skipped += 1
+                    continue
+                seen[ident] = True
             tasks.append((it.path, rel, ck))
         w = UploadWorker(oss, self.oss_index, tasks,
-                         is_cancelled=self.is_cancelled)
+                         is_cancelled=self.is_cancelled,
+                         threads=self.settings.upload_threads)
         self._track(w)
         return w, len(tasks), skipped
 
@@ -631,7 +648,7 @@ class LibraryController(QObject):
                 self.status.emit("该图片尚未上传到云，请先「上传到云」", 5000)
                 return None
             key = rec["key"]
-        return oss.sign(key, SHARE_EXPIRES)
+        return oss.sign(key, self.settings.share_days * 24 * 3600)
 
     def cache_info(self) -> tuple[int, int]:
         """返回 (文件数, 总字节)。"""

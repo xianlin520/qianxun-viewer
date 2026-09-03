@@ -29,16 +29,18 @@ class ScanSignals(QObject):
 
 
 class ScanWorker(QRunnable):
-    def __init__(self, root: Path, is_cancelled=None):
+    def __init__(self, root: Path, is_cancelled=None, parallel: int = 8):
         super().__init__()
         self.root = root
         self.is_cancelled = is_cancelled
+        self.parallel = parallel
         self.signals = ScanSignals()
 
     def run(self):
         try:
             total = errors = 0
-            for batch, errs in scanner.scan_batches(self.root):
+            for batch, errs in scanner.scan_batches(self.root,
+                                                    parallel=self.parallel):
                 if self.is_cancelled and self.is_cancelled():
                     return
                 errors += errs
@@ -173,39 +175,55 @@ class ListWorker(QRunnable):
 
 class UploadSignals(QObject):
     progress = Signal(int, int, str)   # 完成, 总数, 当前文件名
-    finished = Signal(int)             # 成功上传数
+    finished = Signal(int, int)        # 成功上传数, 失败数
     failed = Signal(str)
 
 
 class UploadWorker(QRunnable):
-    """批量增量上传；tasks: [(local, rel, ck), ...]。"""
+    """多线程增量上传；tasks: [(local, rel, ck), ...]。"""
 
-    def __init__(self, oss, index, tasks, is_cancelled=None):
+    def __init__(self, oss, index, tasks, is_cancelled=None, threads: int = 4):
         super().__init__()
         self.oss = oss
         self.index = index
         self.tasks = tasks
         self.is_cancelled = is_cancelled
+        self.threads = max(1, threads)
         self.signals = UploadSignals()
 
     def run(self):
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
         from ..core.oss_service import OssIndex
-        uploaded = 0
+        lock = threading.Lock()
+        counter = {"done": 0, "up": 0, "fail": 0}
         total = len(self.tasks)
-        for i, (local, rel, ck) in enumerate(self.tasks):
+
+        def one(task):
+            local, rel, ck = task
             if self.is_cancelled and self.is_cancelled():
-                break
+                return
             key = OssIndex.make_key(rel)
+            ok = False
             try:
                 self.oss.upload(local, key)
                 st = local.stat()
-                self.index.put(ck, key, st.st_size, st.st_mtime)
-                self.index.save()
-                uploaded += 1
+                with lock:
+                    self.index.put(ck, key, st.st_size, st.st_mtime)
+                    self.index.save()
+                ok = True
             except Exception:
-                pass
-            self.signals.progress.emit(i + 1, total, local.name)
-        self.signals.finished.emit(uploaded)
+                ok = False
+            with lock:
+                counter["done"] += 1
+                counter["up"] += 1 if ok else 0
+                counter["fail"] += 0 if ok else 1
+                d = counter["done"]
+            self.signals.progress.emit(d, total, local.name)
+
+        with ThreadPoolExecutor(self.threads) as ex:
+            list(ex.map(one, self.tasks))
+        self.signals.finished.emit(counter["up"], counter["fail"])
 
 
 class MoveSignals(QObject):

@@ -140,3 +140,44 @@ class AppSettings:
     @oss_ak_secret.setter
     def oss_ak_secret(self, v: str) -> None:
         self._s.setValue("oss_ak_secret", v)
+
+    # ---- 行为设置 ----
+    @property
+    def upload_threads(self) -> int:
+        return max(1, min(8, self._get_int("upload_threads", 4)))
+
+    @upload_threads.setter
+    def upload_threads(self, v: int) -> None:
+        self._s.setValue("upload_threads", int(v))
+
+    @property
+    def upload_skip_dups(self) -> bool:
+        return str(self._get("upload_skip_dups", "1")) not in ("0", "false")
+
+    @upload_skip_dups.setter
+    def upload_skip_dups(self, v: bool) -> None:
+        self._s.setValue("upload_skip_dups", "1" if v else "0")
+
+    @property
+    def share_days(self) -> int:
+        return max(1, min(7, self._get_int("share_days", 7)))
+
+    @share_days.setter
+    def share_days(self, v: int) -> None:
+        self._s.setValue("share_days", int(v))
+
+    @property
+    def scan_parallel(self) -> int:
+        return max(1, min(16, self._get_int("scan_parallel", 8)))
+
+    @scan_parallel.setter
+    def scan_parallel(self, v: int) -> None:
+        self._s.setValue("scan_parallel", int(v))
+
+    @property
+    def auto_load_last(self) -> bool:
+        return str(self._get("auto_load_last", "1")) not in ("0", "false")
+
+    @auto_load_last.setter
+    def auto_load_last(self, v: bool) -> None:
+        self._s.setValue("auto_load_last", "1" if v else "0")

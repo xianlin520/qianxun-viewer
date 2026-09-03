@@ -86,6 +86,13 @@ class DuplicatesDialog(QDialog):
         host.adjustSize()
         scroll.setWidget(host)
         outer.addWidget(scroll)
+        btn_redo = QPushButton("重新检测")
+        btn_redo.clicked.connect(self._redo)
+        outer.addWidget(btn_redo)
+
+    def _redo(self) -> None:
+        self.controller.find_duplicates(True)
+        self.accept()
 
     def _preview(self, item) -> QPixmap:
         """优先复用任意档位本地缓存；均无时同步生成 256 档兜底。"""

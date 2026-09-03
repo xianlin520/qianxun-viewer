@@ -1,51 +1,62 @@
 # 千寻图片查看器 QianXun Viewer
 # 版权所有 (C) 羡林i (Y_XianLin)，保留所有权利。
 
-"""千寻图片查看器入口。"""
+"""入口：启动即拉起 Logo 启动画面，重型依赖延迟到闪屏之后加载。"""
 import sys
 
-from PySide6.QtGui import QPixmapCache
-from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import QApplication
 
-from src.ui.main_window import MainWindow
-from src.utils.paths import base_dir
-from src import meta
+def main() -> int:
+    # 轻量依赖先行：闪屏必须尽快出现
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QPixmap, QPixmapCache
+    from PySide6.QtWidgets import QApplication, QSplashScreen
 
-_SINGLE_KEY = "QianXunViewer-SingleInstance"
+    app = QApplication(sys.argv)
+    app.setApplicationName("QianXunViewer")
+    app.setOrganizationName("QianXun")
+    app.setStyle("Fusion")
 
+    from src import meta
+    from src.utils.paths import base_dir
 
-def _acquire_single_instance() -> QLocalServer | None:
-    """单实例保护：已有实例运行时返回 None 并通知其激活。"""
+    # 单实例保护（QtNetwork 轻量）：已有实例则激活并退出
+    from PySide6.QtNetwork import QLocalServer, QLocalSocket
+    key = "QianXunViewer-SingleInstance"
     sock = QLocalSocket()
-    sock.connectToServer(_SINGLE_KEY)
+    sock.connectToServer(key)
     if sock.waitForConnected(300):
         sock.write(b"activate")
         sock.flush()
         sock.waitForBytesWritten(500)
-        sock.disconnectFromServer()
-        return None
-    QLocalServer.removeServer(_SINGLE_KEY)
+        return 0
+    QLocalServer.removeServer(key)
     server = QLocalServer()
-    if not server.listen(_SINGLE_KEY):
-        return server  # 监听失败不阻断启动
-    return server
+    server.listen(key)
 
+    # 启动画面：Logo + 版本，立即显示
+    logo = QPixmap(str(base_dir() / "assets" / "logo.png"))
+    splash = QSplashScreen(logo.scaled(
+        220, 220, Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation))
+    splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+    splash.showMessage(
+        f"千寻图片查看器 v{meta.VERSION} 启动中…",
+        Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
+        Qt.GlobalColor.darkGray)
+    splash.show()
+    app.processEvents()
 
-def main() -> int:
-    app = QApplication(sys.argv)
-    app.setApplicationName("QianXunViewer")
-    app.setOrganizationName("QianXun")
     app.setApplicationVersion(meta.VERSION)
-    server = _acquire_single_instance()
-    if server is None:
-        return 0  # 已通知现有实例，本进程退出
-    app.setStyle("Fusion")
     QPixmapCache.setCacheLimit(300 * 1024)  # KB：网格缩略图 QPixmap 内存缓存上限
     qss = base_dir() / "src" / "ui" / "styles.qss"
     if qss.exists():
         app.setStyleSheet(qss.read_text("utf-8"))
+
+    # 重型依赖（PySide6 全模块/PIL/numpy/oss2 链）延迟到闪屏之后
+    from src.ui.main_window import MainWindow
     win = MainWindow()
+    win.show()
+    splash.finish(win)
 
     def _activate() -> None:
         conn = server.nextPendingConnection()
@@ -58,7 +69,6 @@ def main() -> int:
 
     server.newConnection.connect(_activate)
     app._qx_single_server = server  # 保持引用
-    win.show()
     return app.exec()
 
 
