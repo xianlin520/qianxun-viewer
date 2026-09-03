@@ -457,6 +457,29 @@ class LibraryController(QObject):
             self.remove_item(it)
         self.status.emit(f"已保留{'最大' if by == 'size' else '最新'}，其余移出", 3000)
 
+    def batch_keep(self, actives: list, by: str) -> None:
+        """跨组批处理：每组保留一张（by='size'|'mtime'），其余移出/删除。
+        actives: 每组的候选列表（已剔除排除项）。"""
+        rest = []
+        for active in actives:
+            keep = max(active,
+                       key=lambda i: i.size_bytes if by == "size" else i.mtime)
+            rest.extend(it for it in active if it is not keep)
+        if not rest:
+            return
+        if self.online_mode:
+            self.remove_online_items(rest)
+            self.status.emit(
+                f"批处理 {len(actives)} 组：每组保留"
+                f"{'最大' if by == 'size' else '最新'}，"
+                f"其余 {len(rest)} 张云端删除中…", 5000)
+            return
+        for it in rest:
+            self.remove_item(it)
+        self.status.emit(
+            f"批处理 {len(actives)} 组：每组保留"
+            f"{'最大' if by == 'size' else '最新'}，其余 {len(rest)} 张移出", 3000)
+
     def remove_online_items(self, items) -> None:
         """删除云端对象并同步清理本地索引/视图（不可逆）。"""
         if not self.online_mode or self.oss is None or not items:

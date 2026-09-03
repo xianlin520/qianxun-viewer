@@ -25,8 +25,10 @@ class DuplicatesDialog(QDialog):
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
-        hint = QLabel("勾选「排除」跳过误判图片；「保留最大/最新」仅一键处理未排除项。")
+        hint = QLabel("单张勾选「排除」跳过误判图片；整组勾选「排除该组」跳过整组；"
+                      "底部「一键保留最大/最新」批量处理所有未排除组。")
         hint.setStyleSheet("color:#8a8f98;")
+        hint.setWordWrap(True)
         outer.addWidget(hint)
         scroll = QScrollArea()
         scroll.setWidgetResizable(False)
@@ -40,10 +42,19 @@ class DuplicatesDialog(QDialog):
             lay.addWidget(QLabel("未发现疑似重复图片。"))
 
         self._checks: list[list[QCheckBox]] = []
+        self._groups = groups
+        self._group_excl: list[QCheckBox] = []
         for gi, group in enumerate(groups):
+            trow = QHBoxLayout()
             title = QLabel(f"第 {gi + 1} 组（{len(group)} 张）")
             title.setStyleSheet("color:#8ab4f8;font-weight:bold;")
-            lay.addWidget(title)
+            trow.addWidget(title)
+            gchk = QCheckBox("排除该组")
+            gchk.setStyleSheet("color:#8a8f98;")
+            trow.addWidget(gchk)
+            trow.addStretch(1)
+            lay.addLayout(trow)
+            self._group_excl.append(gchk)
 
             row = QHBoxLayout()
             row.setSpacing(8)
@@ -107,9 +118,23 @@ class DuplicatesDialog(QDialog):
         host.adjustSize()
         scroll.setWidget(host)
         outer.addWidget(scroll)
+
+        bottom = QHBoxLayout()
+        online = self.controller.online_mode
+        tip = ("在线模式：确认后将永久删除云端重复对象（不可逆）"
+               if online else "本地模式：移出到 Remove/，可还原")
+        bb1 = QPushButton("一键保留最大（处理未排除组）")
+        bb1.setToolTip(tip)
+        bb1.clicked.connect(lambda: self._batch("size"))
+        bb2 = QPushButton("一键保留最新（处理未排除组）")
+        bb2.setToolTip(tip)
+        bb2.clicked.connect(lambda: self._batch("mtime"))
         btn_redo = QPushButton("重新检测")
         btn_redo.clicked.connect(self._redo)
-        outer.addWidget(btn_redo)
+        bottom.addWidget(bb1)
+        bottom.addWidget(bb2)
+        bottom.addWidget(btn_redo)
+        outer.addLayout(bottom)
 
     def _redo(self) -> None:
         self.controller.find_duplicates(True)
@@ -133,6 +158,35 @@ class DuplicatesDialog(QDialog):
         if out is not None:
             return QPixmap(str(out))
         return QPixmap()
+
+    def _batch(self, by: str) -> None:
+        """跨组一键批处理：每个未排除组保留一张，其余移出/删除。"""
+        actives = []
+        for gi, group in enumerate(self._groups):
+            if self._group_excl[gi].isChecked():
+                continue
+            checks = self._checks[gi] if gi < len(self._checks) else []
+            active = [it for it, c in zip(group, checks)
+                      if not c.isChecked()]
+            if len(active) >= 2:
+                actives.append(active)
+        if not actives:
+            QMessageBox.information(self, "提示",
+                                    "没有可处理的组（均被排除或不足 2 张）。")
+            return
+        n_del = sum(len(a) - 1 for a in actives)
+        if self.controller.online_mode:
+            ans = QMessageBox.question(
+                self, "云端批量删除确认",
+                f"将对 {len(actives)} 组永久删除 {n_del} 张云端重复图片"
+                f"（不可恢复），每组仅保留"
+                f"{'最大' if by == 'size' else '最新'}的一张。继续？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if ans != QMessageBox.StandardButton.Yes:
+                return
+        self.controller.batch_keep(actives, by)
+        self.accept()
 
     def _keep(self, gi: int, group, by: str) -> None:
         checks = self._checks[gi] if gi < len(self._checks) else []
