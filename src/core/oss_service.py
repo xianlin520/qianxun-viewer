@@ -78,9 +78,13 @@ class OssLibrary:
             return False
 
     def list_images(self, max_workers: int = 8) -> list:
-        """返回 [(key, size, last_modified, width, height)]。"""
-        objs = [o for o in self._oss2.ObjectIterator(self.bucket, prefix=PREFIX)
-                if Path(o.key).suffix.lower() in IMAGE_EXTS]
+        """返回 [(key, size, last_modified, width, height)]。
+
+        列举整个 Bucket（任意文件夹下的图片都纳入），
+        跳过目录占位对象与非图片文件。"""
+        objs = [o for o in self._oss2.ObjectIterator(self.bucket)
+                if not o.key.endswith("/")
+                and Path(o.key).suffix.lower() in IMAGE_EXTS]
 
         def info(o):
             try:
