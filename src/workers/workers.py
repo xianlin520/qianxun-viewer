@@ -290,3 +290,31 @@ class MoveWorker(QRunnable):
             _emit(self.signals.finished, str(self.src), str(dst))
         except Exception as exc:
             _emit(self.signals.failed, str(self.src), str(exc))
+
+
+class OnlineDeleteSignals(QObject):
+    finished = Signal(list)   # 已删除的 item 路径 str 列表
+    failed = Signal(str, str)
+
+
+class OnlineDeleteWorker(QRunnable):
+    """删除云端对象（不可逆）；调用方需先经 UI 确认。"""
+
+    def __init__(self, oss, items, is_cancelled=None):
+        super().__init__()
+        self.oss = oss
+        self.items = items
+        self.is_cancelled = is_cancelled
+        self.signals = OnlineDeleteSignals()
+
+    def run(self):
+        done = []
+        for it in self.items:
+            if self.is_cancelled and self.is_cancelled():
+                break
+            try:
+                self.oss.delete_object(it.remote_key)
+                done.append(str(it.path))
+            except Exception as exc:
+                _emit(self.signals.failed, str(it.path), str(exc))
+        _emit(self.signals.finished, done)

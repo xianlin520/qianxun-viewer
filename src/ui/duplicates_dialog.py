@@ -71,10 +71,8 @@ class DuplicatesDialog(QDialog):
             b2 = QPushButton("保留最新\n其余移出")
             b2.clicked.connect(lambda _=False, g=group: self._keep(g, "mtime"))
             if online:
-                hint = "在线模式仅供比对，\n云端删除请到 OSS 控制台"
                 for b in (b1, b2):
-                    b.setEnabled(False)
-                    b.setToolTip(hint)
+                    b.setToolTip("在线模式：确认后将永久删除云端重复对象（不可逆）")
             btns.addWidget(b1)
             btns.addWidget(b2)
             btns.addStretch(1)
@@ -120,4 +118,17 @@ class DuplicatesDialog(QDialog):
         return QPixmap()
 
     def _keep(self, group, by: str) -> None:
+        if self.controller.online_mode:
+            from PySide6.QtWidgets import QMessageBox
+            n = len(group) - 1
+            if n <= 0:
+                return
+            ans = QMessageBox.question(
+                self, "云端删除确认",
+                f"将永久删除 {n} 张云端重复图片（不可恢复），\n"
+                f"仅保留{'最大' if by == 'size' else '最新'}的一张。继续？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if ans != QMessageBox.StandardButton.Yes:
+                return
         self.controller.keep_one(group, by)

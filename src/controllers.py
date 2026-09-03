@@ -23,7 +23,8 @@ from .core.settings import AppSettings
 from .utils import file_ops
 from .utils.format import human_size
 from .workers.workers import (DecodeWorker, HashWorker, ListWorker, MoveWorker,
-                              ScanWorker, ThumbWorker, UploadWorker)
+                              OnlineDeleteWorker, ScanWorker, ThumbWorker,
+                              UploadWorker)
 
 SORT_MODES = [("random", "随机"), ("time_asc", "时间正序"), ("time_desc", "时间倒序"),
               ("size_asc", "大小正序"), ("size_desc", "大小倒序")]
@@ -443,15 +444,48 @@ class LibraryController(QObject):
         self.status.emit(f"已还原：{Path(dst).name}", 3000)
 
     def keep_one(self, group, by: str) -> None:
-        """重复组一键保留：by = 'size' | 'mtime'，其余移出。仅本地模式。"""
-        if self.online_mode:
-            self.status.emit("在线模式仅供查重比对，云端删除请到 OSS 控制台", 5000)
-            return
+        """重复组一键保留：by = 'size' | 'mtime'。
+        本地模式其余可逆移出；在线模式其余云端删除（不可逆，UI 层需先确认）。"""
         keep = max(group, key=lambda i: i.size_bytes if by == "size" else i.mtime)
-        for it in group:
-            if it is not keep:
-                self.remove_item(it)
+        rest = [it for it in group if it is not keep]
+        if self.online_mode:
+            self.remove_online_items(rest)
+            self.status.emit(
+                f"已保留{'最大' if by == 'size' else '最新'}，其余 {len(rest)} 张云端删除中…", 3000)
+            return
+        for it in rest:
+            self.remove_item(it)
         self.status.emit(f"已保留{'最大' if by == 'size' else '最新'}，其余移出", 3000)
+
+    def remove_online_items(self, items) -> None:
+        """删除云端对象并同步清理本地索引/视图（不可逆）。"""
+        if not self.online_mode or self.oss is None or not items:
+            return
+        keymap = {str(it.path): it.remote_key for it in items if it.remote_key}
+        w = OnlineDeleteWorker(self.oss, list(items),
+                               is_cancelled=self.is_cancelled)
+        w.signals.finished.connect(lambda ps: self._on_online_deleted(ps, keymap))
+        w.signals.failed.connect(
+            lambda p, m: self.status.emit(f"云端删除失败：{m}", 5000))
+        self._track(w)
+        self.move_pool.start(w)
+
+    def _on_online_deleted(self, paths, keymap) -> None:
+        deleted_keys = {keymap.get(p) for p in paths}
+        for p in paths:
+            item = self._by_path.pop(p, None)
+            if item is not None and item in self.all_items:
+                self.all_items.remove(item)
+        # 清理增量上传索引中指向已删对象的记录，避免后续上传误跳过
+        stale = [ck for ck, rec in self.oss_index.data.items()
+                 if rec.get("key") in deleted_keys]
+        for ck in stale:
+            del self.oss_index.data[ck]
+        if stale:
+            self.oss_index.save()
+        self.refresh_view()
+        self.wall_update.emit()
+        self.status.emit(f"已删除 {len(paths)} 张云端重复图片", 3000)
 
     def save_item(self, item) -> bool:
         dest = self.settings.default_save_dir

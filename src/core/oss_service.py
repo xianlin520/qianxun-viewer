@@ -138,6 +138,10 @@ class OssLibrary:
         except Exception:
             return False
 
+    def delete_object(self, key: str) -> None:
+        """删除云端对象（不可逆，调用方需自行确认）。"""
+        self.bucket.delete_object(key)
+
     def download_to(self, key: str, dest: Path, thumb: int = 0) -> None:
         self.bucket.get_object_to_file(key, str(dest),
                                        process=self._process(thumb))
