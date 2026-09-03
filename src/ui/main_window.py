@@ -541,6 +541,17 @@ class MainWindow(QWidget):
             self.controller.restore_item(item)
 
     def _copy_share_link(self, item, permanent: bool = False) -> None:
+        if (self.controller.oss_configured() and not item.remote_key
+                and not self.controller.resolve_cloud_key(item)):
+            ans = QMessageBox.question(
+                self, "未上传到云",
+                "该图片尚未上传到云，是否立即上传并获取链接？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes)
+            if ans != QMessageBox.StandardButton.Yes:
+                return
+            if not self.controller.upload_one(item):
+                return
         link = self.controller.share_link(item, permanent)
         if link:
             from PySide6.QtWidgets import QApplication

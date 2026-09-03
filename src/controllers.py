@@ -11,8 +11,8 @@ import zlib
 from collections import deque
 from pathlib import Path
 
-from PySide6.QtCore import (QFileSystemWatcher, QObject, QThreadPool, QTimer,
-                            Signal)
+from PySide6.QtCore import (QEventLoop, QFileSystemWatcher, QObject,
+                            QThreadPool, QTimer, Signal)
 from PySide6.QtGui import QPixmap
 
 from .core import thumbnail
@@ -102,6 +102,7 @@ class LibraryController(QObject):
         self.oss: OssLibrary | None = None
         self.online_mode = False
         self.oss_index = OssIndex()
+        self._cloud_keys = None   # 云端 key 缓存（懒加载，上传后增量维护）
 
         # 目录变更监听：防抖后自动重扫
         self._watcher = QFileSystemWatcher(self)
@@ -701,16 +702,37 @@ class LibraryController(QObject):
         self._track(w)
         return w, len(tasks), skipped
 
-    def _share_key(self, item):
-        """返回对象 key；本地项未上传时提示并返回 None。"""
-        key = item.remote_key
-        if not key:
-            rec = self.oss_index.get(thumbnail.cache_key(item))
-            if not rec:
-                self.status.emit("该图片尚未上传到云，请先「上传到云」", 5000)
-                return None
-            key = rec["key"]
-        return key
+    def _rel_key(self, item) -> str:
+        """本地项对应的云端对象 key（与上传路径同一规则）。"""
+        try:
+            rel = item.path.resolve().relative_to(
+                self.main_root.resolve()).as_posix()
+        except (ValueError, AttributeError):
+            rel = item.path.name
+        return OssIndex.make_key(rel)
+
+    def resolve_cloud_key(self, item):
+        """解析项的云端 key：remote_key → 本地索引 → 云端清单匹配（补登索引）。"""
+        if item.remote_key:
+            return item.remote_key
+        rec = self.oss_index.get(thumbnail.cache_key(item))
+        if rec:
+            return rec["key"]
+        oss = self._share_oss()
+        if oss is None:
+            return None
+        if self._cloud_keys is None:
+            try:
+                self._cloud_keys = oss.list_keys()
+            except Exception:
+                self._cloud_keys = set()
+        key = self._rel_key(item)
+        if key in self._cloud_keys:
+            self.oss_index.put(thumbnail.cache_key(item), key,
+                               item.size_bytes, item.mtime)
+            self.oss_index.save()
+            return key
+        return None
 
     def _share_oss(self):
         try:
@@ -725,8 +747,9 @@ class LibraryController(QObject):
         if oss is None:
             self.status.emit("请先配置 OSS", 5000)
             return None
-        key = self._share_key(item)
+        key = self.resolve_cloud_key(item)
         if not key:
+            self.status.emit("该图片尚未上传到云", 3000)
             return None
         if permanent:
             try:
@@ -740,7 +763,7 @@ class LibraryController(QObject):
     def revoke_share(self, item) -> bool:
         """撤回永久公开（对象恢复继承桶私有）。"""
         oss = self._share_oss()
-        key = self._share_key(item) if oss else None
+        key = self.resolve_cloud_key(item) if oss else None
         if not oss or not key:
             return False
         try:
@@ -749,6 +772,36 @@ class LibraryController(QObject):
         except Exception as exc:
             self.status.emit(f"撤回公共读失败：{exc}", 5000)
             return False
+
+    def upload_one(self, item) -> bool:
+        """单张同步上传（忙等光标），成功后补登索引/云端缓存。"""
+        oss = self._share_oss()
+        if oss is None or self.main_root is None:
+            self.status.emit("请先配置 OSS", 5000)
+            return False
+        ck = thumbnail.cache_key(item)
+        key = self._rel_key(item)
+        w = UploadWorker(oss, self.oss_index, [(item.path, key[len("qx/"):], ck)],
+                         is_cancelled=self.is_cancelled, threads=1)
+        loop = QEventLoop()
+        result = {"up": 0}
+        w.signals.finished.connect(lambda up, fail: (result.update(up=up), loop.quit()))
+        self._track(w)
+        self.pool.start(w)
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            loop.exec()
+        finally:
+            QApplication.restoreOverrideCursor()
+        if result["up"]:
+            if self._cloud_keys is not None:
+                self._cloud_keys.add(key)
+            self.status.emit("上传完成", 3000)
+            return True
+        self.status.emit("上传失败", 5000)
+        return False
 
     def cache_info(self) -> tuple[int, int]:
         """返回 (文件数, 总字节)。"""
