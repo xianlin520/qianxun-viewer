@@ -8,10 +8,10 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut, QIcon
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QLabel,
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QLabel,
                                QLineEdit, QMenu, QMessageBox, QPushButton,
                                QSlider, QStatusBar, QToolBar, QVBoxLayout,
-                               QWidget)
+                               QWidget, QWidgetAction)
 
 from .. import meta
 from ..controllers import ASPECT_PRESETS, SORT_MODES, LibraryController
@@ -85,10 +85,6 @@ class MainWindow(QWidget):
         self.btn_open = QPushButton("打开目录")
         tb.addWidget(self.btn_open)
 
-        self.btn_refresh = QPushButton("刷新")
-        self.btn_refresh.setToolTip("重新扫描当前目录 (F5)")
-        tb.addWidget(self.btn_refresh)
-
         self.combo_sort = QComboBox()
         for _key, label in SORT_MODES:
             self.combo_sort.addItem(label)
@@ -103,72 +99,73 @@ class MainWindow(QWidget):
         self.slider.setFixedWidth(140)
         tb.addWidget(self.slider)
 
-        self.chk_fav = QCheckBox("仅看最爱")
-        tb.addWidget(self.chk_fav)
-
-        self.btn_dup = QPushButton("查找重复")
-        tb.addWidget(self.btn_dup)
-
         self.edit_search = QLineEdit()
         self.edit_search.setPlaceholderText("搜索文件名…")
         self.edit_search.setClearButtonEnabled(True)
         self.edit_search.setFixedWidth(160)
         tb.addWidget(self.edit_search)
 
-        self.combo_aspect = QComboBox()
-        self.combo_aspect.setEditable(True)
-        self.combo_aspect.addItems(ASPECT_PRESETS)
-        self.combo_aspect.setFixedWidth(90)
-        self.combo_aspect.setToolTip("按长宽比筛选（整体符合即可，±10%），\n"
-                                     "可自定义如 1.5:3")
-        tb.addWidget(self.combo_aspect)
-
         self.combo_folder = QComboBox()
         self.combo_folder.setFixedWidth(140)
         self.combo_folder.setToolTip("按子文件夹筛选（含其子树）")
+        self.combo_folder.setVisible(False)   # 有子文件夹时才显示
         tb.addWidget(self.combo_folder)
-
-        self.btn_trash = QPushButton("垃圾桶")
-        self.btn_trash.setCheckable(True)
-        tb.addWidget(self.btn_trash)
-
-        self.btn_upload = QPushButton("上传到云")
-        tb.addWidget(self.btn_upload)
-
-        self.btn_online = QPushButton("在线库")
-        self.btn_online.setCheckable(True)
-        tb.addWidget(self.btn_online)
 
         self.btn_mode = QPushButton("分页模式")
         self.btn_mode.setCheckable(True)
         tb.addWidget(self.btn_mode)
 
-        self.btn_settings = QPushButton("设置")
-        tb.addWidget(self.btn_settings)
+        self.btn_online = QPushButton("在线库")
+        self.btn_online.setCheckable(True)
+        tb.addWidget(self.btn_online)
 
-        self.btn_cache = QPushButton("缓存")
-        tb.addWidget(self.btn_cache)
+        self.btn_more = QPushButton("更多 ▾")
+        tb.addWidget(self.btn_more)
 
-        self.btn_about = QPushButton("关于")
-        tb.addWidget(self.btn_about)
+        # ---- 「更多」菜单：收纳低频操作，工具栏保持精简 ----
+        self.menu_more = QMenu(self)
+        self.act_refresh = self.menu_more.addAction("刷新 (F5)")
+        self.act_dup = self.menu_more.addAction("查找重复")
+        self.act_fav = self.menu_more.addAction("仅看最爱")
+        self.act_fav.setCheckable(True)
+        wa = QWidgetAction(self.menu_more)
+        self.combo_aspect = QComboBox()
+        self.combo_aspect.setEditable(True)
+        self.combo_aspect.addItems(ASPECT_PRESETS)
+        self.combo_aspect.setFixedWidth(120)
+        self.combo_aspect.setToolTip("按长宽比筛选（整体符合即可，±10%），\n"
+                                     "可自定义如 1.5:3")
+        wa.setDefaultWidget(self.combo_aspect)
+        self.menu_more.addAction(wa)
+        self.menu_more.addSeparator()
+        self.act_trash = self.menu_more.addAction("垃圾桶")
+        self.act_trash.setCheckable(True)
+        self.act_upload = self.menu_more.addAction("上传到云")
+        self.menu_more.addSeparator()
+        self.act_cache = self.menu_more.addAction("缓存管理")
+        self.act_settings = self.menu_more.addAction("设置")
+        self.act_about = self.menu_more.addAction("关于")
+        self.btn_more.setMenu(self.menu_more)
 
     def _wire(self) -> None:
         self.btn_open.clicked.connect(self._open_dir)
-        self.btn_refresh.clicked.connect(self.controller.reload_current)
+        self.act_refresh.triggered.connect(self.controller.reload_current)
         self.combo_sort.currentIndexChanged.connect(
             lambda i: self.controller.set_sort(SORT_MODES[i][0]))
         self.btn_reseed.clicked.connect(self.controller.reseed)
         self.slider.valueChanged.connect(self.controller.set_thumb_size)
-        self.chk_fav.toggled.connect(self.controller.set_fav_only)
-        self.btn_dup.clicked.connect(lambda: self.controller.find_duplicates(True))
+        self.act_fav.toggled.connect(self.controller.set_fav_only)
+        self.act_fav.toggled.connect(lambda _on: self._sync_more_badge())
+        self.act_dup.triggered.connect(
+            lambda: self.controller.find_duplicates(True))
         self.btn_mode.toggled.connect(
             lambda on: self.controller.set_view_mode("page" if on else "scroll"))
         self.btn_mode.toggled.connect(lambda _on: self._sync_mode_ui())
-        self.btn_settings.clicked.connect(self._open_settings)
-        self.btn_about.clicked.connect(self._show_about)
-        self.btn_cache.clicked.connect(
+        self.act_settings.triggered.connect(self._open_settings)
+        self.act_about.triggered.connect(self._show_about)
+        self.act_cache.triggered.connect(
             lambda: CacheDialog(self.controller, self).show())
-        self.btn_upload.clicked.connect(
+        self.act_upload.triggered.connect(
             lambda: UploadDialog(self.controller, self).show())
         self.btn_online.toggled.connect(self._on_online_toggled)
         self._search_timer = QTimer(self)
@@ -184,6 +181,8 @@ class MainWindow(QWidget):
             lambda: self.controller.set_aspect(self.combo_aspect.currentText()))
         self.combo_aspect.currentTextChanged.connect(
             lambda _t: self._aspect_timer.start())
+        self.combo_aspect.currentTextChanged.connect(
+            lambda _t: self._sync_more_badge())
         self.combo_folder.currentIndexChanged.connect(self._on_folder_changed)
         self.controller.scan_done.connect(self._refresh_folders)
 
@@ -199,7 +198,8 @@ class MainWindow(QWidget):
         self.wall.item_clicked.connect(lambda i: self.viewer.open_at(i))
         self.wall.customContextMenuRequested.connect(self._wall_context)
         self.controller.wall_update.connect(self.wall.update)
-        self.btn_trash.toggled.connect(self._on_trash_toggled)
+        self.act_trash.toggled.connect(self._on_trash_toggled)
+        self.act_trash.toggled.connect(lambda _on: self._sync_more_badge())
         self.slider.valueChanged.connect(self._on_slider)
 
         self.controller.status.connect(
@@ -278,8 +278,16 @@ class MainWindow(QWidget):
         i = self.combo_folder.findText(cur)
         self.combo_folder.setCurrentIndex(i if i >= 0 else 0)
         self.combo_folder.blockSignals(False)
+        self.combo_folder.setVisible(self.combo_folder.count() > 1)
         if i > 0:
             self.controller.set_folder_filter(cur)
+
+    def _sync_more_badge(self) -> None:
+        """「更多」按钮上以 ● 提示菜单内有生效中的状态。"""
+        active = (self.act_fav.isChecked() or self.act_trash.isChecked()
+                  or self.combo_aspect.currentText().strip()
+                  not in ("", ASPECT_PRESETS[0]))
+        self.btn_more.setText("更多 ●" if active else "更多 ▾")
 
     def _on_online_toggled(self, on: bool) -> None:
         if on and not self.controller.oss_configured():
@@ -297,9 +305,9 @@ class MainWindow(QWidget):
         self._sync_mode_ui()
 
     def _on_trash_toggled(self, on: bool) -> None:
-        self.chk_fav.blockSignals(True)
-        self.chk_fav.setChecked(False)
-        self.chk_fav.blockSignals(False)
+        self.act_fav.blockSignals(True)
+        self.act_fav.setChecked(False)
+        self.act_fav.blockSignals(False)
         self.controller.set_fav_only(False)
         self.delegate.trash_mode = on
         self.controller.set_trash_mode(on)
@@ -332,10 +340,10 @@ class MainWindow(QWidget):
         for url in e.mimeData().urls():
             p = Path(url.toLocalFile())
             if p.is_dir():
-                if self.btn_trash.isChecked():
-                    self.btn_trash.blockSignals(True)
-                    self.btn_trash.setChecked(False)
-                    self.btn_trash.blockSignals(False)
+                if self.act_trash.isChecked():
+                    self.act_trash.blockSignals(True)
+                    self.act_trash.setChecked(False)
+                    self.act_trash.blockSignals(False)
                     self.delegate.trash_mode = False
                 self.controller.load_directory(p)
                 e.acceptProposedAction()
@@ -399,10 +407,10 @@ class MainWindow(QWidget):
         d = QFileDialog.getExistingDirectory(self, "选择图片目录",
                                              str(self.controller.main_root or self.controller.root or ""))
         if d:
-            if self.btn_trash.isChecked():
-                self.btn_trash.blockSignals(True)
-                self.btn_trash.setChecked(False)
-                self.btn_trash.blockSignals(False)
+            if self.act_trash.isChecked():
+                self.act_trash.blockSignals(True)
+                self.act_trash.setChecked(False)
+                self.act_trash.blockSignals(False)
                 self.delegate.trash_mode = False
             self.controller.load_directory(Path(d))
 
