@@ -95,7 +95,9 @@
 
 ## 10. 在线库（阿里云 OSS，v1.3.0 测试版）
 
-- **配置**：「上传到云」→「配置 OSS」，填 Endpoint（如 `https://oss-cn-hangzhou.aliyuncs.com`）、Bucket、AccessKey ID/Secret；「测试连接」验证后保存（仅存本机用户目录）。
+- **配置**：「上传到云」→「配置 OSS」，填 Endpoint、Bucket、AccessKey ID/Secret；「测试连接」验证后保存（仅存本机用户目录）。
+  - Endpoint 默认用直连域名（如 `https://oss-cn-qingdao.aliyuncs.com`，同地域快且流量便宜）；
+  - 跨地域/远距离访问慢时，可改为传输加速域名 `https://oss-accelerate.aliyuncs.com`（加速流量费更高）。
 - **上传**：「上传到云」→「开始增量上传」：已传自动跳过（sha1 索引），进度条实时显示。
 - **在线浏览**：工具栏「在线库」开关；列表/缩略图/大图全走签名 URL，缩略图由 OSS IMG 实时缩放（`resize+format`），不落云盘缓存。
 - **分享**：右键「复制外链」生成 ≤7 天签名 URL；本地项需先上传。
