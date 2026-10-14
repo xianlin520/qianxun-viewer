@@ -559,6 +559,20 @@ class MainWindow(QWidget):
             msg = ("已复制永久链接（对象已设公共读）" if permanent
                    else "已复制签名外链（限时有效）")
             self._status.showMessage(msg, 3000)
+            return
+        if permanent and self.controller.share_blocked:
+            days = self.controller.settings.share_days
+            ans = QMessageBox.question(
+                self, "无法生成永久链接",
+                "该 Bucket 开启了「阻止公共访问」，对象不能设为公共读，"
+                "因此拿不到永久直链。\n\n"
+                f"是否改为复制限时签名外链（{days} 天有效）？\n\n"
+                "如需真正的永久直链：OSS 控制台 → 该 Bucket → 权限管理 → 关闭"
+                "「阻止公共访问」（OSS 全局的同类开关也需关闭）。",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes)
+            if ans == QMessageBox.StandardButton.Yes:
+                self._copy_share_link(item)
 
     def _revoke_share(self, item) -> None:
         if self.controller.revoke_share(item):

@@ -38,6 +38,7 @@
 - **P1 上传管道**：工具栏「上传到云」对话框（配置/测试连接/批量增量上传/进度）。
 - **P2 在线库**：工具栏「在线库」开关；列表/缩略图/大图全链路走签名 URL。
 - **P3 分享**：双模式——「复制外链」限时签名（本地项未上传则提示先上传；在线项直接签名 ≤7 天）；「复制永久链接」仅将该对象设公共读（桶保持私有）得永久直链，另提供「撤回永久公开」恢复私有。
+  - 注：新建 Bucket 默认开启「阻止公共访问」（Bucket 级 + OSS 全局），开启时对象 ACL 不可设为 public-read，永久直链不可用；程序识别该错误后提示并询问是否降级为限时签名外链。
 
 ## 5. 依赖与配置
 
@@ -47,7 +48,8 @@
 - **RAM 最小权限**（自定义策略，资源名按实际桶名替换）：
   - 对象级 `acs:oss:*:*:<bucket>/*`：`oss:GetObject`（浏览/预览/缩略图）、`oss:PutObject`（上传）、`oss:DeleteObject`（在线删重/移出）、`oss:GetObjectAcl` + `oss:PutObjectAcl`（永久直链分享与撤回）、`oss:AbortMultipartUpload`（分片中断清理）。
   - 桶级 `acs:oss:*:*:<bucket>`：`oss:ListObjects`（在线库列举，必需）、`oss:GetBucketInfo`（“测试连接”，必需）、`oss:GetBucketAcl`。
-  - 缺权限的典型报错：列举/桶信息 `AccessDenied: The bucket you access does not belong to you.`；删除 `AccessDenied: You have no right to access this object because of bucket acl.`（对象读写在而列表/删除不在，多为策略只授了部分 action）。
+  - 缺权限的典型报错：列举/桶信息 `AccessDenied: The bucket you access does not belong to you.`；删除 `AccessDenied: You have no right to access this object because of bucket acl.`（对象读写在而列表/删除不在，多为策略只授了部分 action）；对象公共读 `AccessDenied: Put public object acl is not allowed`（实测于 2026-10-14 的新桶：**阻挡来自「阻止公共访问」默认开启**，非权限问题）。
+- **永久直链前提**：需关闭 Bucket 级与 OSS 全局的「阻止公共访问」，否则对象 ACL 只能 private/default；限时签名外链不受此限制。
 - **换桶**：上传索引按桶分文件（`oss_index_<bucket>.json`），换 Bucket 后不会误用旧桶的“已上传”记录。
 
 ## 6. 验证策略
@@ -55,6 +57,7 @@
 - 无凭据阶段：本地 Fake OSS（内存/临时目录后端）跑通 upload/list/sign/download 与控制器链路。✅ 已完成（冒烟 11/11）。
 - 有凭据阶段：真实 Bucket 端到端（上传 10 张→在线浏览→外链打开）。✅ 2026-09-03 联调 10/10 通过（连接/上传/列表+image_info/IMG缩略图URL/原图外链/在线库浏览/缩略图缓存/大图解码/分享链接/清理）。
 - V4 签名回归：✅ 2026-10-14 真实旧桶 13/13 通过（region 推导、AuthV4 构建、测试连接、整桶列举、IMG 签名缩略图匿名 200、并发取宽高、上传、head、签名外链 200、对象公共读匿名 200→撤回 403、删除、按桶索引文件）。
+- 新桶 xianlin-oss 实测（2026-10-14，补权限后）：✅ V4 构建、测试连接、整桶列举 0、上传、签名外链匿名 200、缩略图参数签名 200、删除、探测对象自清理（桶内回到 0 对象）；⚠️ 对象公共读被「阻止公共访问」拦下（预期行为，见 §5）。
 
 ## 7. 状态
 

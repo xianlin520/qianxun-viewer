@@ -49,6 +49,9 @@ _ERROR_HINTS = (
      "地域不匹配或 RAM 权限不足：核对 Bucket 地域与 Endpoint，并授予 oss:ListObjects、oss:GetBucketInfo"),
     ("no right to access this object",
      "对象操作被拒：请给 AccessKey 授予 oss:DeleteObject 等对象级权限"),
+    ("put public object acl is not allowed",
+     "该 Bucket 开启了「阻止公共访问」，对象不能设为公共读：可改用限时签名外链，"
+     "或到 OSS 控制台关闭“阻止公共访问”后重试"),
     ("secondleveldomainforbidden", "Endpoint 与 Bucket 地域不匹配"),
     ("nosuchbucket", "Bucket 不存在：核对名称与地域"),
     ("signaturedoesnotmatch", "AccessKey Secret 不正确"),
@@ -80,6 +83,11 @@ def friendly_error(exc) -> str:
         if needle.replace(" ", "") in low:
             return f"{text[:160]}｜提示：{hint}"
     return text[:200]
+
+
+def is_block_public_error(exc) -> bool:
+    """是否为“阻止公共访问”导致的对象公共读被拒（可用限时外链降级）。"""
+    return "put public object acl is not allowed" in str(exc).lower()
 
 
 class OssIndex:

@@ -19,7 +19,7 @@ from .core import thumbnail
 from .core.favorites import FavoritesStore
 from .core.image_item import ImageItem
 from .core.oss_service import (SHARE_EXPIRES, OssIndex, OssLibrary,
-                              friendly_error)
+                              friendly_error, is_block_public_error)
 from .core.settings import AppSettings
 from .utils import file_ops
 from .utils.format import human_size
@@ -105,6 +105,8 @@ class LibraryController(QObject):
         self.oss_index = OssIndex()
         self._index_bucket = ""  # 索引所属 Bucket（换桶后自动重建）
         self._cloud_keys = None   # 云端 key 缓存（懒加载，上传后增量维护）
+        self.share_error = ""     # 最近一次分享失败原因（供 UI 提示）
+        self.share_blocked = False   # 是否因“阻止公共访问”失败（可降级签名外链）
 
         # 目录变更监听：防抖后自动重扫
         self._watcher = QFileSystemWatcher(self)
@@ -758,7 +760,11 @@ class LibraryController(QObject):
             return None
 
     def share_link(self, item, permanent: bool = False) -> str | None:
-        """签名外链（≤7 天）；permanent=True 时对象设公共读，返回永久直链。"""
+        """签名外链（≤7 天）；permanent=True 时对象设公共读，返回永久直链。
+
+        失败时在 share_error / share_blocked 留下原因，供 UI 提示或降级。"""
+        self.share_error = ""
+        self.share_blocked = False
         oss = self._share_oss()
         if oss is None:
             self.status.emit("请先配置 OSS", 5000)
@@ -772,7 +778,9 @@ class LibraryController(QObject):
                 oss.make_public(key)
                 return oss.public_url(key)
             except Exception as exc:
-                self.status.emit(f"设置公共读失败：{friendly_error(exc)}", 8000)
+                self.share_error = friendly_error(exc)
+                self.share_blocked = is_block_public_error(exc)
+                self.status.emit(f"设置公共读失败：{self.share_error}", 8000)
                 return None
         return oss.sign(key, self.settings.share_days * 24 * 3600)
 
