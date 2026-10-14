@@ -158,6 +158,7 @@ qianxun-viewer/
 
 - [用户指南](docs/USER_GUIDE.md)
 - [架构设计](docs/ARCHITECTURE.md)
+- [OSS 开发手册](docs/OSS_DEV_MANUAL.md)（接口/上下行/分享链接/链接失效/权限/实测速率）
 - [变更日志](docs/CHANGELOG.md)
 
 ## 版权与许可

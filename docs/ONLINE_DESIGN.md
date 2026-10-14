@@ -42,6 +42,7 @@
 
 ## 5. 依赖与配置
 
+- 二次开发与运维的完整用法（接口清单、上传/下载、分享链接与失效机制、RAM 策略、实测速率、报错对照）见 [OSS_DEV_MANUAL.md](OSS_DEV_MANUAL.md)；本机凭据（含 Secret）在 `.secrets/oss_credentials.local.md`（gitignore，不入库）。
 - 新增运行依赖 `oss2`（≥2.18.4，V4 签名支持下限）。
 - 设置项：`oss_endpoint / oss_bucket / oss_ak_id / oss_ak_secret`（存用户目录 INI，仅本机）。
 - **签名版本（自动）**：Endpoint 可推导地域（`https://oss-<region>.aliyuncs.com`，含 `-internal/-vpc` 后缀）时使用 **V4 签名**（`oss2.AuthV4` + `Bucket(region=…)`）；阿里云自 2025-09-01 起新建的 Bucket 不支持 V1 签名，旧桶则 V1/V4 均可。自定义域名 / 加速域名推导不出地域，退回 V1。
