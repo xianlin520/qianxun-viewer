@@ -136,7 +136,7 @@
 - **配置**：「更多」→「上传到云」→「配置 OSS」，填 Endpoint、Bucket、AccessKey ID/Secret；「测试连接」验证后保存。配置仅存本机用户目录（`%APPDATA%\QianXun\QianXunViewer.ini`），其中 **Secret 用 Windows DPAPI 加密**（绑定当前 Windows 账户，不会明文落盘、不上传不外传）。
   - Endpoint 默认用直连域名（如 `https://oss-cn-qingdao.aliyuncs.com`，同地域快且流量便宜）；
   - 跨地域/远距离访问慢时，可改为传输加速域名 `https://oss-accelerate.aliyuncs.com`（加速流量费更高）。
-  - **新建 Bucket**：2025 年后新建的桶只接受 V4 签名，程序会按 Endpoint 自动推导地域并使用 V4（旧桶同样兼容）；因此 Endpoint 建议填地域域名，自定义域名/加速域名推出不了地域，会退回 V1，可能无法访问新桶。
+  - **新建 Bucket**：阿里云自 2025-09-01 起新建的桶不支持 V1 签名，程序会按 Endpoint 自动推导地域并使用 V4 签名（旧桶 V1/V4 都可用）；因此 Endpoint 建议填地域域名，自定义域名/加速域名推导不出地域，会退回 V1，可能无法访问新桶。
   - **RAM 权限**：AccessKey 需具备桶级「列表对象 / 桶信息」与对象级「读 / 写 / 删 / 对象 ACL」权限。权限不足的典型报错：「测试连接」或在线库报 `The bucket you access does not belong to you.`（缺 ListObjects/GetBucketInfo），在线删重报 `no right to access this object because of bucket acl`（缺 DeleteObject）。最小权限清单见 [ONLINE_DESIGN.md §5](ONLINE_DESIGN.md)，省事也可直接给该 RAM 用户挂系统策略 `AliyunOSSFullAccess`。
 - **换桶**：直接改配置为新 Endpoint/Bucket/AK 即可——上传索引按桶分文件存放，不会把新桶误认为「已上传过」；本地图库重新「上传到云」即可重传。
 - **设置面板**：默认读取/保存目录、查重阈值、上传并发线程（1–8）、扫描并行（1–16）、外链有效期（1–7 天）、同内容跳过开关、启动自动加载上次目录。

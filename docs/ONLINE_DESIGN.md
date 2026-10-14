@@ -41,9 +41,9 @@
 
 ## 5. 依赖与配置
 
-- 新增运行依赖 `oss2`。
+- 新增运行依赖 `oss2`（≥2.18.4，V4 签名支持下限）。
 - 设置项：`oss_endpoint / oss_bucket / oss_ak_id / oss_ak_secret`（存用户目录 INI，仅本机）。
-- **签名版本（自动）**：Endpoint 可推导地域（`https://oss-<region>.aliyuncs.com`，含 `-internal/-vpc` 后缀）时使用 **V4 签名**（`oss2.AuthV4` + `Bucket(region=…)`）；2025 年起新建的 Bucket 只接受 V4，旧桶同样兼容 V4。自定义域名 / 加速域名推导不出地域，退回 V1。
+- **签名版本（自动）**：Endpoint 可推导地域（`https://oss-<region>.aliyuncs.com`，含 `-internal/-vpc` 后缀）时使用 **V4 签名**（`oss2.AuthV4` + `Bucket(region=…)`）；阿里云自 2025-09-01 起新建的 Bucket 不支持 V1 签名，旧桶则 V1/V4 均可。自定义域名 / 加速域名推导不出地域，退回 V1。
 - **RAM 最小权限**（自定义策略，资源名按实际桶名替换）：
   - 对象级 `acs:oss:*:*:<bucket>/*`：`oss:GetObject`（浏览/预览/缩略图）、`oss:PutObject`（上传）、`oss:DeleteObject`（在线删重/移出）、`oss:GetObjectAcl` + `oss:PutObjectAcl`（永久直链分享与撤回）、`oss:AbortMultipartUpload`（分片中断清理）。
   - 桶级 `acs:oss:*:*:<bucket>`：`oss:ListObjects`（在线库列举，必需）、`oss:GetBucketInfo`（“测试连接”，必需）、`oss:GetBucketAcl`。
