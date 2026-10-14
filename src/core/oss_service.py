@@ -24,11 +24,32 @@ def app_data_dir() -> Path:
     return d
 
 
-class OssIndex:
-    """本地增量上传索引：sha1(路径|大小|mtime) -> {key, size, mtime, at}。"""
+def oss_region(endpoint: str) -> str:
+    """从 Endpoint 推导 OSS 地域：oss-cn-qingdao.aliyuncs.com → cn-qingdao。
 
-    def __init__(self) -> None:
-        self.path = app_data_dir() / "oss_index.json"
+    推导不出时返回空串（自定义域名 / 加速域名），此时退回 V1 签名。"""
+    host = endpoint.strip().split("//")[-1].split("/")[0].lower()
+    if not host.endswith("aliyuncs.com"):
+        return ""
+    seg = host.split(".")[0]
+    if not seg.startswith("oss-"):
+        return ""
+    region = seg[len("oss-"):]
+    for suffix in ("-internal", "-vpc", "-intranet"):
+        if region.endswith(suffix):
+            region = region[: -len(suffix)]
+    return "" if region.startswith("accelerate") else region
+
+
+class OssIndex:
+    """本地增量上传索引：sha1(路径|大小|mtime) -> {key, size, mtime, at}。
+
+    按 Bucket 分文件存放，换桶后不会误用旧桶的记录。"""
+
+    def __init__(self, bucket: str = "") -> None:
+        safe = "".join(c if c.isalnum() or c in "-._" else "_" for c in bucket)
+        name = f"oss_index_{safe}.json" if safe else "oss_index.json"
+        self.path = app_data_dir() / name
         self.data: dict[str, dict] = {}
         self.load()
 
@@ -65,7 +86,17 @@ class OssLibrary:
         import oss2
         self._oss2 = oss2
         self.bucket_name = bucket
-        self.bucket = oss2.Bucket(oss2.Auth(ak_id, ak_secret), endpoint, bucket)
+        self.region = oss_region(endpoint)
+        if self.region and hasattr(oss2, "AuthV4"):
+            # 新开通/新建的 Bucket 仅接受 V4 签名（旧桶同样兼容 V4）
+            auth = oss2.AuthV4(ak_id, ak_secret)
+        else:
+            auth = oss2.Auth(ak_id, ak_secret)
+        try:
+            self.bucket = oss2.Bucket(auth, endpoint, bucket,
+                                      region=self.region or None)
+        except TypeError:   # 老版本 oss2 不接受 region 参数
+            self.bucket = oss2.Bucket(auth, endpoint, bucket)
 
     def test(self) -> str:
         info = self.bucket.get_bucket_info()

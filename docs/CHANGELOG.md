@@ -3,6 +3,14 @@
 本文件记录千寻图片查看器（QianXun Viewer）的重要变更。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)，版本号遵循语义化版本。
 
+## [1.4.1] - 2026-10-14
+
+### 修复
+
+- **新 Bucket 兼容（重要）**：OSS 自 2025 年起新建的 Bucket 仅接受 V4 签名，程序此前固定用 V1 签名，导致新桶下几乎所有在线操作失败（列举/信息/删除均报 AccessDenied）。现按 Endpoint 自动推导地域并使用 V4（`oss2.AuthV4` + `Bucket(region=…)`）；旧桶同样兼容 V4，已用真实旧桶回归 13/13 通过。自定义域名/加速域名推导不出地域时退回 V1。
+- **换桶不再误判**：本地上传索引按 Bucket 分文件存储（`oss_index_<bucket>.json`），更换 Bucket 后不会沿用旧桶的「已上传」记录，避免上传被误跳过、分享指向旧桶对象；切桶同时清空云端 key 缓存。
+- 文档补充 RAM 最小权限清单与典型缺权限报错（docs/ONLINE_DESIGN.md §5、docs/USER_GUIDE.md §10）。
+
 ## [1.4.0] - 2026-09-03（正式版）
 
 v1.3.0 测试期全部增量合并定版，首个含 OSS 在线库的正式发布：

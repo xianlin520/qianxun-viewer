@@ -1,6 +1,6 @@
 # 在线图片查看设计（阿里云 OSS 方案）
 
-千寻图片查看器 v1.4.0 · 版权所有 © 羡林i (Y_XianLin)
+千寻图片查看器 v1.4.1 · 版权所有 © 羡林i (Y_XianLin)
 
 ## 1. 选型结论
 
@@ -20,7 +20,7 @@
   │           缩略图 = 签名URL(process resize) 下载到本地 .qx_cache → 复用图片墙/分页/大图
   │           原图   = 签名URL 按需下载到本地临时 → 复用 DecodeWorker
   │ P3 分享:  右键"复制外链" = ≤7天签名URL；"复制永久链接" = 单对象公共读直链（可撤回）
-  └ 索引: %LOCALAPPDATA%/QianXunViewer/oss_index.json (relpath→key/size/mtime)
+  └ 索引: %LOCALAPPDATA%/QianXunViewer/oss_index_<bucket>.json (relpath→key/size/mtime，按桶隔离)
 安全: 配置仅存本机 QSettings(INI, 用户目录)，其中 SK 用 Windows DPAPI 加密（绑定当前 Windows 账户，密文拷到其他机器/账户无法解出）；历史明文配置启动时自动迁移为密文；签名过期≤7天；可选 RAM 子账号最小权限
 ```
 
@@ -43,13 +43,21 @@
 
 - 新增运行依赖 `oss2`。
 - 设置项：`oss_endpoint / oss_bucket / oss_ak_id / oss_ak_secret`（存用户目录 INI，仅本机）。
+- **签名版本（自动）**：Endpoint 可推导地域（`https://oss-<region>.aliyuncs.com`，含 `-internal/-vpc` 后缀）时使用 **V4 签名**（`oss2.AuthV4` + `Bucket(region=…)`）；2025 年起新建的 Bucket 只接受 V4，旧桶同样兼容 V4。自定义域名 / 加速域名推导不出地域，退回 V1。
+- **RAM 最小权限**（自定义策略，资源名按实际桶名替换）：
+  - 对象级 `acs:oss:*:*:<bucket>/*`：`oss:GetObject`（浏览/预览/缩略图）、`oss:PutObject`（上传）、`oss:DeleteObject`（在线删重/移出）、`oss:GetObjectAcl` + `oss:PutObjectAcl`（永久直链分享与撤回）、`oss:AbortMultipartUpload`（分片中断清理）。
+  - 桶级 `acs:oss:*:*:<bucket>`：`oss:ListObjects`（在线库列举，必需）、`oss:GetBucketInfo`（“测试连接”，必需）、`oss:GetBucketAcl`。
+  - 缺权限的典型报错：列举/桶信息 `AccessDenied: The bucket you access does not belong to you.`；删除 `AccessDenied: You have no right to access this object because of bucket acl.`（对象读写在而列表/删除不在，多为策略只授了部分 action）。
+- **换桶**：上传索引按桶分文件（`oss_index_<bucket>.json`），换 Bucket 后不会误用旧桶的“已上传”记录。
 
 ## 6. 验证策略
 
 - 无凭据阶段：本地 Fake OSS（内存/临时目录后端）跑通 upload/list/sign/download 与控制器链路。✅ 已完成（冒烟 11/11）。
 - 有凭据阶段：真实 Bucket 端到端（上传 10 张→在线浏览→外链打开）。✅ 2026-09-03 联调 10/10 通过（连接/上传/列表+image_info/IMG缩略图URL/原图外链/在线库浏览/缩略图缓存/大图解码/分享链接/清理）。
+- V4 签名回归：✅ 2026-10-14 真实旧桶 13/13 通过（region 推导、AuthV4 构建、测试连接、整桶列举、IMG 签名缩略图匿名 200、并发取宽高、上传、head、签名外链 200、对象公共读匿名 200→撤回 403、删除、按桶索引文件）。
 
 ## 7. 状态
 
 - v1.4.0 正式版：P1/P2/P3 全功能 + 测试期增量（分享双模式/在线查重/DPAPI/启动优化）随正式版发布。
+- v1.4.1：签名版本自动适配（新桶必需 V4）+ 上传索引按桶隔离。
 - API 用法对齐官方文档：`sign_url(params=x-oss-process)`、`get_object_to_file(process=…)`、`resumable_upload`、`image/info` 取宽高。

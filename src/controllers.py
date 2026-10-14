@@ -102,6 +102,7 @@ class LibraryController(QObject):
         self.oss: OssLibrary | None = None
         self.online_mode = False
         self.oss_index = OssIndex()
+        self._index_bucket = ""  # 索引所属 Bucket（换桶后自动重建）
         self._cloud_keys = None   # 云端 key 缓存（懒加载，上传后增量维护）
 
         # 目录变更监听：防抖后自动重扫
@@ -583,6 +584,15 @@ class LibraryController(QObject):
         self._cancelled = True
 
     # ---------------- OSS 在线库 ----------------
+    def _sync_oss_index(self) -> None:
+        """索引与云端 key 缓存按 Bucket 隔离，换桶后不误用旧桶记录。"""
+        bucket = self.settings.oss_bucket if self.oss_configured() else ""
+        if bucket == self._index_bucket:
+            return
+        self._index_bucket = bucket
+        self.oss_index = OssIndex(bucket)
+        self._cloud_keys = None
+
     def oss_configured(self) -> bool:
         s = self.settings
         return bool(s.oss_endpoint and s.oss_bucket and s.oss_ak_id
@@ -590,6 +600,7 @@ class LibraryController(QObject):
 
     def build_oss(self) -> OssLibrary:
         s = self.settings
+        self._sync_oss_index()
         return OssLibrary(s.oss_endpoint, s.oss_bucket, s.oss_ak_id,
                           s.oss_ak_secret)
 
@@ -602,6 +613,7 @@ class LibraryController(QObject):
             if not self.oss_configured():
                 self.status.emit("请先在「上传到云」中配置 OSS", 5000)
                 return False
+            self._sync_oss_index()
             try:
                 self.oss = self.build_oss()
             except Exception as exc:
@@ -668,6 +680,7 @@ class LibraryController(QObject):
             return None, 0, 0
         if not self.oss_configured():
             return None, 0, 0
+        self._sync_oss_index()
         oss = self.build_oss()
         existing = oss.list_keys()
         skip_dups = self.settings.upload_skip_dups
@@ -713,6 +726,7 @@ class LibraryController(QObject):
 
     def resolve_cloud_key(self, item):
         """解析项的云端 key：remote_key → 本地索引 → 云端清单匹配（补登索引）。"""
+        self._sync_oss_index()
         if item.remote_key:
             return item.remote_key
         rec = self.oss_index.get(thumbnail.cache_key(item))
