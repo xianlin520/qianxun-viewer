@@ -26,6 +26,7 @@ class OssConfigDialog(QDialog):
         form.addRow("AccessKey ID", self.ed_ak)
         form.addRow("AccessKey Secret", self.ed_sk)
         self.lbl = QLabel("AK/SK 仅保存在本机用户目录，不上传不入库")
+        self.lbl.setWordWrap(True)
         form.addRow(self.lbl)
         row = QHBoxLayout()
         btn_test = QPushButton("测试连接")
@@ -43,16 +44,18 @@ class OssConfigDialog(QDialog):
                 self.ed_ak.text().strip(), self.ed_sk.text().strip())
 
     def _test(self) -> None:
-        from ..core.oss_service import OssLibrary
+        from ..core.oss_service import OssLibrary, friendly_error
         e, b, a, s = self._collect()
         if not (e and b and a and s):
             self.lbl.setText("请先填写完整四项")
             return
         try:
-            name = OssLibrary(e, b, a, s).test()
-            self.lbl.setText(f"连接成功：{name}")
+            lib = OssLibrary(e, b, a, s)
+            name = lib.test()
+            ver = "V4" if lib.region else "V1"
+            self.lbl.setText(f"连接成功：{name}（{ver} 签名）")
         except Exception as exc:
-            self.lbl.setText(f"连接失败：{exc}")
+            self.lbl.setText(f"连接失败：{friendly_error(exc)}")
 
     def _save(self) -> None:
         st = self.settings

@@ -18,7 +18,8 @@ from PySide6.QtGui import QPixmap
 from .core import thumbnail
 from .core.favorites import FavoritesStore
 from .core.image_item import ImageItem
-from .core.oss_service import SHARE_EXPIRES, OssIndex, OssLibrary
+from .core.oss_service import (SHARE_EXPIRES, OssIndex, OssLibrary,
+                              friendly_error)
 from .core.settings import AppSettings
 from .utils import file_ops
 from .utils.format import human_size
@@ -491,7 +492,7 @@ class LibraryController(QObject):
                                is_cancelled=self.is_cancelled)
         w.signals.finished.connect(lambda ps: self._on_online_deleted(ps, keymap))
         w.signals.failed.connect(
-            lambda p, m: self.status.emit(f"云端删除失败：{m}", 5000))
+            lambda p, m: self.status.emit(f"云端删除失败：{friendly_error(m)}", 8000))
         self._track(w)
         self.move_pool.start(w)
 
@@ -640,7 +641,8 @@ class LibraryController(QObject):
             w.signals.batch.connect(self._on_online_batch)
             w.signals.finished.connect(self._on_online_done)
             w.signals.failed.connect(
-                lambda m: self.status.emit(f"在线库列表失败：{m}", 5000))
+                lambda m: self.status.emit(
+                    f"在线库列表失败：{friendly_error(m)}", 8000))
             self._track(w)
             self.pool.start(w)
             return True
@@ -770,7 +772,7 @@ class LibraryController(QObject):
                 oss.make_public(key)
                 return oss.public_url(key)
             except Exception as exc:
-                self.status.emit(f"设置公共读失败：{exc}", 5000)
+                self.status.emit(f"设置公共读失败：{friendly_error(exc)}", 8000)
                 return None
         return oss.sign(key, self.settings.share_days * 24 * 3600)
 
@@ -784,7 +786,7 @@ class LibraryController(QObject):
             oss.revoke_public(key)
             return True
         except Exception as exc:
-            self.status.emit(f"撤回公共读失败：{exc}", 5000)
+            self.status.emit(f"撤回公共读失败：{friendly_error(exc)}", 8000)
             return False
 
     def upload_one(self, item) -> bool:

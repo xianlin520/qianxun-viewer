@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from urllib.parse import quote
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -39,6 +40,46 @@ def oss_region(endpoint: str) -> str:
         if region.endswith(suffix):
             region = region[: -len(suffix)]
     return "" if region.startswith("accelerate") else region
+
+
+_ERROR_HINTS = (
+    ("v1 signature is forbidden",
+     "该 Bucket 只接受 V4 签名：Endpoint 请填地域域名（如 https://oss-cn-qingdao.aliyuncs.com）"),
+    ("does not belong to you",
+     "地域不匹配或 RAM 权限不足：核对 Bucket 地域与 Endpoint，并授予 oss:ListObjects、oss:GetBucketInfo"),
+    ("no right to access this object",
+     "对象操作被拒：请给 AccessKey 授予 oss:DeleteObject 等对象级权限"),
+    ("secondleveldomainforbidden", "Endpoint 与 Bucket 地域不匹配"),
+    ("nosuchbucket", "Bucket 不存在：核对名称与地域"),
+    ("signaturedoesnotmatch", "AccessKey Secret 不正确"),
+    ("invalidaccesskeyid", "AccessKey ID 不存在或已禁用"),
+)
+
+
+def friendly_error(exc) -> str:
+    """把 OSS 报错压成一行并附可操作提示（原始 dict 报错直接展示会很长）。"""
+    text = str(exc)
+    details = getattr(exc, "details", None)
+    # 类型化异常（AccessDenied 等）details 即内层字典；
+    # 通用 ServerError 则多包一层 {'status':…, 'details': {…}}。
+    if isinstance(details, dict) and isinstance(details.get("details"),
+                                               (dict, str)):
+        details = details["details"]
+    if isinstance(details, dict):
+        code = str(details.get("Code") or "")
+        msg = str(details.get("Message") or "")
+        if code or msg:
+            text = ": ".join(x for x in (code, msg) if x)
+    else:
+        m = re.search(r"'Code':\s*'([^']+)'.*?'Message':\s*'([^']*)'",
+                      text, re.S)
+        if m:
+            text = f"{m.group(1)}: {m.group(2)}"
+    low = text.lower().replace(" ", "")
+    for needle, hint in _ERROR_HINTS:
+        if needle.replace(" ", "") in low:
+            return f"{text[:160]}｜提示：{hint}"
+    return text[:200]
 
 
 class OssIndex:
