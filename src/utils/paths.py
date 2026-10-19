@@ -1,4 +1,4 @@
-# 千寻图片查看器 QianXun Viewer
+# 千寻影集 QianXun Album
 # 版权所有 (C) 羡林i (Y_XianLin)，保留所有权利。
 
 """资源路径：兼容开发态与 PyInstaller 打包态（sys._MEIPASS）。"""

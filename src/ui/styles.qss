@@ -1,4 +1,4 @@
-/* 千寻图片查看器 - 暗色主题 */
+/* 千寻影集 - 暗色主题 */
 QWidget {
     background-color: #202124;
     color: #e8eaed;

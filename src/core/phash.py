@@ -1,4 +1,4 @@
-# 千寻图片查看器 QianXun Viewer
+# 千寻影集 QianXun Album
 # 版权所有 (C) 羡林i (Y_XianLin)，保留所有权利。
 
 """自实现 pHash（numpy 32×32 灰度 + 二维 DCT），替代 imagehash 以精简依赖与包体。

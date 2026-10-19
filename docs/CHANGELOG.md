@@ -1,7 +1,20 @@
 # 变更日志
 
-本文件记录千寻图片查看器（QianXun Viewer）的重要变更。
+本文件记录千寻影集（QianXun Album）的重要变更。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)，版本号遵循语义化版本。
+
+## [1.5.0] - 2026-10-19
+
+### 变更
+
+- **产品更名：千寻图片查看器 → 千寻影集（QianXun Album）**。「千寻」保留为系列名，与千寻云、千寻云盘同族；「影集」直接对应图片收藏管理。窗口标题、启动闪屏、关于框、标题栏统计、README 与全部文档同步更新。
+- **本次只改显示名，技术标识一律不动**：可执行文件名仍为 `QianXunViewer.exe`、配置仍存 `%APPDATA%\QianXun\QianXunViewer.ini`、缓存仍存 `%LOCALAPPDATA%\QianXunViewer\`、单实例键仍为 `QianXunViewer-SingleInstance`、仓库名仍为 `qianxun-viewer`。因此**老用户升级零影响**：设置、最爱、垃圾桶、上传索引、缩略图缓存全部沿用，无需迁移。
+- 文档纠偏：[docs/ARCHITECTURE.md](ARCHITECTURE.md) 抬头版本号由 `v1.0.0` 更正为当前版本（此前后续文档已到 1.4.1，属文档漂移）；[README.md](../README.md) 仓库链接由个人空间 `xianlin-i/qianxun-viewer` 更正为公开组织仓 `qianxun-cloud/qianxun-viewer`。
+- 重新打包两版产物并实测：onedir 目录版启动正常、窗口标题为「千寻影集」；关窗无残留进程。
+
+### 说明
+
+- 本次未新增或修改功能，行为与 v1.4.1 完全一致；提供新包仅因名称变更需重出产物。
 
 ## [1.4.1] - 2026-10-14
 

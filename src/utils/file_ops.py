@@ -1,4 +1,4 @@
-# 千寻图片查看器 QianXun Viewer
+# 千寻影集 QianXun Album
 # 版权所有 (C) 羡林i (Y_XianLin)，保留所有权利。
 
 """文件操作：另存为 / 复制剪贴板 / 定位文件 / 移入 Remove / 还原（可逆，不做删除）。"""

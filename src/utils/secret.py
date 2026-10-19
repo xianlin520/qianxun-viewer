@@ -1,4 +1,4 @@
-# 千寻图片查看器 QianXun Viewer
+# 千寻影集 QianXun Album
 # 版权所有 (C) 羡林i (Y_XianLin)，保留所有权利。
 
 """Windows DPAPI 机密加解密（绑定当前 Windows 账户，无第三方依赖）。

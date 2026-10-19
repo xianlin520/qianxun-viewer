@@ -1,4 +1,4 @@
-# 千寻图片查看器 QianXun Viewer
+# 千寻影集 QianXun Album
 # 版权所有 (C) 羡林i (Y_XianLin)，保留所有权利。
 
 """目录扫描：递归收集图片，跳过 Remove 与隐藏缓存目录。纯 Python，无 Qt 依赖。

@@ -1,4 +1,4 @@
-# 千寻图片查看器 QianXun Viewer
+# 千寻影集 QianXun Album
 # 版权所有 (C) 羡林i (Y_XianLin)，保留所有权利。
 
 """主窗体：工具栏 / 网格 / 分页 / 状态栏 / 快捷键 / 状态恢复。"""
@@ -34,7 +34,7 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.settings = AppSettings()
-        self.setWindowTitle("千寻图片查看器")
+        self.setWindowTitle("千寻影集")
         self.setWindowIcon(QIcon(str(ASSETS / "logo.png")))
         self.resize(1280, 720)
         geo = self.settings.window_geo

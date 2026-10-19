@@ -1,4 +1,4 @@
-# 千寻图片查看器 QianXun Viewer
+# 千寻影集 QianXun Album
 # 版权所有 (C) 羡林i (Y_XianLin)，保留所有权利。
 
 """阿里云 OSS 集成：上传 / 列表 / 签名 / 下载 + 增量上传索引。"""

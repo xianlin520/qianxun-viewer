@@ -1,14 +1,14 @@
-# 千寻图片查看器 QianXun Viewer
+# 千寻影集 QianXun Album
 
-<img src="assets/logo.png" width="96" alt="千寻图片查看器 Logo">
+<img src="assets/logo.png" width="96" alt="千寻影集 Logo">
 
 > 面向大规模本地图片库（千张级、单张 10~60MB）的高性能 Windows 桌面查看器。
 > 缩略图优先 · 全程异步 · 无损操作 · 云盘友好。
 
-`版本 v1.4.1` · `平台 Windows 10/11 x64` · `Python 3.11+ / PySide6`
+`版本 v1.5.0` · `平台 Windows 10/11 x64` · `Python 3.11+ / PySide6`
 
 **作者：羡林i (Y_XianLin)** · 版权所有 © 2026，保留所有权利（详见 [LICENSE](LICENSE)）
-仓库：[Gitee](https://gitee.com/xianlin-i/qianxun-viewer) · 前身：[ImgRandomDisplay](https://gitee.com/xianlin-i/ImgRandomDisplay)
+仓库：[Gitee](https://gitee.com/qianxun-cloud/qianxun-viewer) · 前身：[ImgRandomDisplay](https://gitee.com/xianlin-i/ImgRandomDisplay)
 
 ---
 
@@ -163,6 +163,6 @@ qianxun-viewer/
 
 ## 版权与许可
 
-**千寻图片查看器 QianXun Viewer**
+**千寻影集 QianXun Album**
 **版权所有 © 2026 羡林i (Y_XianLin)，保留所有权利。** 详见 [LICENSE](LICENSE)。
 第三方组件（PySide6、Pillow、numpy、PyInstaller 等）依各自开源许可使用。

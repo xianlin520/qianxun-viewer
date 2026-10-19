@@ -1,4 +1,4 @@
-# 千寻图片查看器 QianXun Viewer
+# 千寻影集 QianXun Album
 # 版权所有 (C) 羡林i (Y_XianLin)，保留所有权利。
 
 """控制层：加载 / 排序 / 分页 / 筛选 / 缩略图调度 / 操作分发。"""
@@ -172,7 +172,7 @@ class LibraryController(QObject):
         total_size = sum(i.size_bytes for i in self.all_items)
         prefix = "垃圾桶 — " if self.trash_mode else ""
         self.title_changed.emit(
-            f"千寻图片查看器 — {prefix}{total} 张 · 共 {human_size(total_size)}")
+            f"千寻影集 — {prefix}{total} 张 · 共 {human_size(total_size)}")
         msg = f"扫描完成：{total} 张图片"
         if errors:
             msg += f"，{errors} 个文件读取失败已跳过"
@@ -669,7 +669,7 @@ class LibraryController(QObject):
         self._scan_finished = True
         total_size = sum(i.size_bytes for i in self.all_items)
         self.title_changed.emit(
-            f"千寻图片查看器 — 在线 {total} 张 · 共 {human_size(total_size)}")
+            f"千寻影集 — 在线 {total} 张 · 共 {human_size(total_size)}")
         self.status.emit(f"在线库加载完成：{total} 张", 5000)
         self.refresh_view()
         self.scan_done.emit()

@@ -1,4 +1,4 @@
-# 千寻图片查看器 QianXun Viewer
+# 千寻影集 QianXun Album
 # 版权所有 (C) 羡林i (Y_XianLin)，保留所有权利。
 
 """入口：启动即拉起 Logo 启动画面，重型依赖延迟到闪屏之后加载。"""
@@ -25,7 +25,7 @@ def main() -> int:
         Qt.TransformationMode.SmoothTransformation))
     splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
     splash.showMessage(
-        f"千寻图片查看器 v{meta.VERSION} 启动中…",
+        f"千寻影集 v{meta.VERSION} 启动中…",
         Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
         Qt.GlobalColor.darkGray)
     splash.show()
