@@ -149,6 +149,13 @@ class LibraryController(QObject):
         self._pending_thumbs = 0
         self._scan_finished = False
         self._dup_done = False
+        # 换库时页码/筛选必须复位：否则新库沿用旧页码会停在空页，
+        # 旧的文件夹筛选也可能匹配不到任何东西
+        self.page = 0
+        self.folder_filter = ""
+        self._warm_queue.clear()
+        self._warm_pending.clear()
+        self._warm_active = 0
         self.favorites = FavoritesStore(path)
         self.delegate.image_root = self.cache_root
         self._watcher.removePaths(self._watcher.directories())

@@ -145,7 +145,14 @@ class ViewerOverlay(QWidget):
     def wheelEvent(self, e) -> None:
         if self._pix.isNull() or not self._scale:
             self._scale = self._fit_scale() or 1.0
-        factor = 1.15 if e.angleDelta().y() > 0 else 1 / 1.15
+        # 优先用 angleDelta（鼠标滚轮）；触控板/高精度设备只有 pixelDelta，
+        # 此时若继续按 angleDelta 判定会把所有滚动当成“向下”而持续缩小。
+        delta = e.angleDelta().y()
+        if delta == 0:
+            delta = e.pixelDelta().y()
+        if delta == 0:
+            return
+        factor = 1.15 if delta > 0 else 1 / 1.15
         new_scale = max(self.MIN_SCALE, min(self.MAX_SCALE, self._scale * factor))
         if new_scale == self._scale:
             return
@@ -178,7 +185,10 @@ class ViewerOverlay(QWidget):
             return
         fit = self._fit_scale()
         if abs(self._scale - fit) > 1e-6:
-            self._scale = fit
+            # 小图适应窗口会算出几十倍放大，必须夹到 MAX_SCALE 以内；
+            # 同时对小图不应放大超过 100%，否则 40×40 会被糊成一片
+            self._scale = max(self.MIN_SCALE,
+                              min(fit, self.MAX_SCALE, 1.0))
         else:
             self._scale = 1.0
         self._offset = QPointF(0, 0)

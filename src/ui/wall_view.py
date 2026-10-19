@@ -181,7 +181,7 @@ class WallView(QAbstractScrollArea):
         super().mousePressEvent(e)
 
     def keyPressEvent(self, e) -> None:
-        # 键盘导航：方向键移动焦点，Enter 进大图
+        # 键盘导航：方向键移动焦点并同步选择，Enter 进大图
         n = len(self._items)
         if n == 0:
             super().keyPressEvent(e)
@@ -205,6 +205,10 @@ class WallView(QAbstractScrollArea):
             new = self._vertical_neighbor(self._focus, up=(k == Qt.Key.Key_Up))
         if new != self._focus:
             self._focus = new
+            # 焦点必须与选择同步：否则方向键移动蓝框后，
+            # Del / F / Ctrl+C 仍作用在旧的 selection 上，移错文件
+            self.selection = {new}
+            self._anchor = new
             self._ensure_visible(new)
             self.update()
 

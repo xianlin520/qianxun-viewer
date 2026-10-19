@@ -22,6 +22,7 @@ class DuplicatesDialog(QDialog):
         self.setWindowTitle(f"疑似重复图片（{len(groups)} 组）")
         self.resize(980, 560)
         self.controller = controller
+        self._busy = False          # 批处理/单组操作进行中标志，防连点重复移出
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
@@ -159,6 +160,8 @@ class DuplicatesDialog(QDialog):
 
     def _batch(self, by: str) -> None:
         """跨组一键批处理：每个未排除组保留一张，其余移出/删除。"""
+        if self._busy:
+            return                      # 防连点：上一次批处理尚未走完
         actives = []
         for gi, group in enumerate(self._groups):
             if self._group_excl[gi].isChecked():
@@ -183,10 +186,16 @@ class DuplicatesDialog(QDialog):
                 QMessageBox.StandardButton.No)
             if ans != QMessageBox.StandardButton.Yes:
                 return
-        self.controller.batch_keep(actives, by)
+        self._busy = True       # 同步批处理期间拒绝再次触发
+        try:
+            self.controller.batch_keep(actives, by)
+        finally:
+            self._busy = False
         self.accept()
 
     def _keep(self, gi: int, group, by: str) -> None:
+        if self._busy:
+            return                      # 防连点：避免同组被重复移出
         checks = self._checks[gi] if gi < len(self._checks) else []
         active = [it for it, c in zip(group, checks) if not c.isChecked()]
         if len(active) < 2:
@@ -203,4 +212,8 @@ class DuplicatesDialog(QDialog):
                 QMessageBox.StandardButton.No)
             if ans != QMessageBox.StandardButton.Yes:
                 return
-        self.controller.keep_one(active, by)
+        self._busy = True
+        try:
+            self.controller.keep_one(active, by)
+        finally:
+            self._busy = False

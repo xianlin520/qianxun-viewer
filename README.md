@@ -5,7 +5,7 @@
 > 面向大规模本地图片库（千张级、单张 10~60MB）的高性能 Windows 桌面查看器。
 > 缩略图优先 · 全程异步 · 无损操作 · 云盘友好。
 
-`版本 v1.5.2` · `平台 Windows 10/11 x64` · `Python 3.11+ / PySide6`
+`版本 v1.5.3` · `平台 Windows 10/11 x64` · `Python 3.11+ / PySide6`
 
 **作者：羡林i (Y_XianLin)** · 版权所有 © 2026，保留所有权利（详见 [LICENSE](LICENSE)）
 仓库：[Gitee](https://gitee.com/qianxun-cloud/qianxun-viewer) · 前身：[ImgRandomDisplay](https://gitee.com/xianlin-i/ImgRandomDisplay)

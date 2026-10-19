@@ -70,7 +70,8 @@ class MainWindow(QWidget):
         self.controller = LibraryController(self.model, self.view,
                                             self.delegate, self.settings)
         self.viewer = ViewerOverlay(self, self.controller)
-        self._click_was_selected = False
+        self._pressed_single: set[int] = set()
+        self._last_click_row = -1
         self._ratio_hinted = False
         self._wire()
         self._restore_state()
@@ -274,8 +275,13 @@ class MainWindow(QWidget):
         i = self.combo_folder.findText(cur)
         self.combo_folder.setCurrentIndex(i if i >= 0 else 0)
         self.combo_folder.blockSignals(False)
+        # 下拉与真实筛选状态对齐：原来的目录消失时，这里必须把 filter 清空，
+        # 否则界面上显示「全部文件夹」但仍在按已不存在的路径过滤（结果为空）
         if i > 0:
-            self.controller.set_folder_filter(cur)
+            if self.controller.folder_filter != cur:
+                self.controller.set_folder_filter(cur)
+        elif self.controller.folder_filter:
+            self.controller.set_folder_filter("")
 
     def _sync_more_badge(self) -> None:
         """「更多」按钮上以 ● 提示菜单内有生效中的状态。"""
@@ -320,6 +326,13 @@ class MainWindow(QWidget):
             self.btn_online.setChecked(False)
             self.btn_online.blockSignals(False)
             return
+        if on:
+            # 在线库与垃圾桶互斥：先收起垃圾桶，避免 delegate 仍显示「还原」按钮
+            if self.act_trash.isChecked():
+                self.act_trash.blockSignals(True)
+                self.act_trash.setChecked(False)
+                self.act_trash.blockSignals(False)
+            self.delegate.trash_mode = False
         ok = self.controller.set_online(on)
         if not ok:
             self.btn_online.blockSignals(True)
@@ -332,17 +345,44 @@ class MainWindow(QWidget):
         self.act_fav.setChecked(False)
         self.act_fav.blockSignals(False)
         self.controller.set_fav_only(False)
+        if on:
+            # 垃圾桶与在线库互斥：先关在线库，否则 delegate/菜单状态会打架
+            self._leave_online()
         self.delegate.trash_mode = on
         self.controller.set_trash_mode(on)
         self._sync_mode_ui()
 
+    def _leave_online(self) -> None:
+        """把在线库状态彻底复位（按钮 + delegate + controller）。"""
+        if self.btn_online.isChecked():
+            self.btn_online.blockSignals(True)
+            self.btn_online.setChecked(False)
+            self.btn_online.blockSignals(False)
+        if self.controller.online_mode:
+            self.controller.set_online(False)
+        self.delegate.trash_mode = False
+
     def _update_hint(self) -> None:
-        if self.controller.root is None:
+        """空态提示：未打开目录 / 目录无图 / 筛选后 0 结果 都要给反馈。"""
+        c = self.controller
+        if c.root is None:
             self._hint.setText("点击「打开目录」或将文件夹拖拽到窗口\n加载图片目录")
             self._hint.show()
-        elif not self.controller.all_items:
-            self._hint.setText("垃圾桶是空的" if self.controller.trash_mode
-                               else "该目录下没有图片")
+        elif not c.all_items:
+            if c.trash_mode:
+                self._hint.setText("垃圾桶是空的")
+            elif not c._scan_finished:
+                self._hint.setText("正在扫描…")
+            else:
+                self._hint.setText("该目录下没有图片")
+            self._hint.show()
+        elif not c.view_items:
+            # 有图但被筛选/排序后为空：明确说是筛选导致，避免误以为库坏了
+            if not c._scan_finished:
+                self._hint.setText("正在扫描…")
+            else:
+                self._hint.setText("当前筛选条件下没有匹配的图片\n"
+                                   "（清空搜索、文件夹或长宽比筛选可恢复）")
             self._hint.show()
         else:
             self._hint.hide()
@@ -411,7 +451,13 @@ class MainWindow(QWidget):
 
     def closeEvent(self, e) -> None:
         s = self.settings
-        if self.controller.root:
+        # 垃圾桶模式下 root 指向 <库>/Remove，不能当作"上次浏览的库"记下来，
+        # 否则下次启动会把 Remove 目录当成普通图库加载
+        if self.controller.trash_mode and self.controller.main_root is not None:
+            s.last_dir = str(self.controller.main_root)
+        elif self.controller.main_root is not None:
+            s.last_dir = str(self.controller.main_root)
+        elif self.controller.root:
             s.last_dir = str(self.controller.root)
         s.view_mode = self.controller.view_mode
         s.sort_mode = self.controller.sort_mode
@@ -451,13 +497,26 @@ class MainWindow(QWidget):
         return [vi[i] for i in sorted(self.wall.selection) if i < len(vi)]
 
     def _on_pressed(self, index) -> None:
-        self._click_was_selected = index.row() in {
-            i.row() for i in self.view.selectedIndexes()}
+        """鼠标按下：记录「按下前」的选择集，用于判断这是第几次点击。
+
+        不能在 pressed 阶段直接判断“是否已选中”——QListView 在 pressed
+        时已更新选择集，会让首次点击也满足条件（单击就开大图）。"""
+        rows = {i.row() for i in self.view.selectedIndexes()}
+        self._pressed_single = rows          # 按下前的单图选择（可能为空）
 
     def _on_clicked(self, index) -> None:
-        # 再次点击已选中的缩略图 → 进入大图浏览器
-        if self._click_was_selected:
+        """再次点击同一张（且它是唯一选中项）才进大图。"""
+        if index is None or not index.isValid():
+            return
+        rows = {i.row() for i in self.view.selectedIndexes()}
+        if rows != {index.row()}:
+            self._last_click_row = -1        # 多选或不在该行：不进入
+            return
+        if self._last_click_row == index.row():
+            self._last_click_row = -1
             self._open_viewer_at(index.row())
+        else:
+            self._last_click_row = index.row()
 
     def _open_viewer_at(self, model_row: int) -> None:
         items = self.model.items()

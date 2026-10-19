@@ -5,8 +5,8 @@
 from __future__ import annotations
 
 from PySide6.QtGui import QPixmapCache
-from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QPushButton,
-                               QVBoxLayout)
+from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QMessageBox,
+                               QPushButton, QVBoxLayout)
 
 from ..core import thumbnail
 from ..utils.format import human_size
@@ -44,6 +44,19 @@ class CacheDialog(QDialog):
                            f"（缓存不写入图片目录，云同步不产生流量）")
 
     def _clean_orphans(self) -> None:
+        n, _b = self.controller.cache_info()
+        if n == 0:
+            self._refresh()
+            self.label.setText(self.label.text() + "\n缓存为空，无需清理。")
+            return
+        ans = QMessageBox.question(
+            self, "清理孤儿缓存",
+            "将删除当前库中已不存在图片的缩略图缓存。\n"
+            "不影响任何图片文件，浏览时会自动重建。继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes)
+        if ans != QMessageBox.StandardButton.Yes:
+            return
         removed = self.controller.clean_cache_orphans()
         QPixmapCache.clear()
         self.controller.wall_update.emit()
@@ -51,6 +64,15 @@ class CacheDialog(QDialog):
         self.label.setText(self.label.text() + f"\n已清理孤儿缓存 {removed} 个。")
 
     def _clean_all(self) -> None:
+        n, b = self.controller.cache_info()
+        ans = QMessageBox.question(
+            self, "清空全部缓存",
+            f"将删除当前库的全部 {n} 个缩略图缓存（占用 {human_size(b)}）。\n"
+            "不影响任何图片文件，但之后浏览需要重新生成，大库会明显变慢。继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if ans != QMessageBox.StandardButton.Yes:
+            return
         self.controller.clean_cache_all()
         QPixmapCache.clear()
         self.controller.wall_update.emit()
