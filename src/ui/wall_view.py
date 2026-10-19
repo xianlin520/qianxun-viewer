@@ -8,11 +8,14 @@
 """
 from __future__ import annotations
 
+import bisect
+
 from PySide6.QtCore import QPoint, QRect, Qt, QEvent, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPixmap, QPixmapCache
 from PySide6.QtWidgets import QAbstractScrollArea
 
 from ..core import thumbnail
+from .theme import ACCENT, BG_APP, BG_CARD_HOVER, BG_CORRUPTED, DANGER, DUP, STAR
 
 
 def _wheel_delta(e) -> int:
@@ -34,6 +37,8 @@ class WallView(QAbstractScrollArea):
         super().__init__(parent)
         self._items: list = []
         self._cells: list = []
+        self._rows: list[tuple[int, int, int]] = []   # (行顶 y, 首下标, 末下标)
+        self._row_tops: list[int] = []                # 行顶列表，供二分
         self._total_h = 0
         self.row_height = 180
         self.image_root = None
@@ -43,13 +48,18 @@ class WallView(QAbstractScrollArea):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         # 视口上的滚轮事件不会走到子类的 wheelEvent，
-        # 用事件过滤器在 viewport 上拦截保证加速滚动生效
+        # 用事件过滤器在视口上拦截保证加速滚动生效
         self.viewport().installEventFilter(self)
         self.verticalScrollBar().valueChanged.connect(self._on_scroll)
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(80)
         self._debounce.timeout.connect(self._emit_range)
+        # 拖窗口边会连续 resize，防抖后再重排
+        self._relayout_timer = QTimer(self)
+        self._relayout_timer.setSingleShot(True)
+        self._relayout_timer.setInterval(60)
+        self._relayout_timer.timeout.connect(self.relayout)
 
     # ---------------- 数据与布局 ----------------
     def set_items(self, items) -> None:
@@ -70,6 +80,7 @@ class WallView(QAbstractScrollArea):
         vp_w = self.viewport().width()
         n = len(self._items)
         cells = [None] * n
+        rows: list[tuple[int, int, int]] = []   # (行顶 y, 首下标, 末下标)
         y = 0
         i = 0
         while i < n and vp_w > 0:
@@ -94,9 +105,12 @@ class WallView(QAbstractScrollArea):
                     w = vp_w - x          # 行内无缝：末格取余宽
                 cells[k] = QRect(x, y, w, row_h)
                 x += w
+            rows.append((y, i, j))
             y += row_h
             i = j + 1
         self._cells = cells
+        self._rows = rows
+        self._row_tops = [r[0] for r in rows]
         self._total_h = y
         sb = self.verticalScrollBar()
         sb.setRange(0, max(0, y - self.viewport().height()))
@@ -104,13 +118,35 @@ class WallView(QAbstractScrollArea):
         sb.setSingleStep(120)
         self._debounce.start()
 
+    def _visible_rows(self, top: int, bot: int) -> tuple[int, int]:
+        """返回与 [top, bot] 相交的行区间 [首行, 末行]（含），用二分定位。"""
+        if not self._rows:
+            return (0, -1)
+        # 首个「行底 >= top」的行：行顶列表上二分后回退一位即可覆盖跨行
+        k = bisect.bisect_right(self._row_tops, top) - 1
+        first = max(0, k)
+        last = first
+        while last + 1 < len(self._rows) and self._rows[last + 1][0] <= bot:
+            last += 1
+        return (first, last)
+
     def resizeEvent(self, e) -> None:
         super().resizeEvent(e)
-        self.relayout()
+        # 拖窗口边会连续触发 resize，防抖后再重排，避免每帧都跑全量贪心
+        self._relayout_timer.start()
 
     # ---------------- 命中与可见范围 ----------------
     def index_at(self, view_pos) -> int:
         p = QPoint(int(view_pos.x()), int(view_pos.y()) + self.verticalScrollBar().value())
+        # 先二分定位到行，再只在该行内找格子（原实现对全部格子线性扫描）
+        if self._rows:
+            k = bisect.bisect_right(self._row_tops, p.y()) - 1
+            if k >= 0:
+                for idx in range(self._rows[k][1], self._rows[k][2] + 1):
+                    cell = self._cells[idx]
+                    if cell is not None and cell.contains(p):
+                        return idx
+            return -1
         for idx, cell in enumerate(self._cells):
             if cell is not None and cell.contains(p):
                 return idx
@@ -119,15 +155,10 @@ class WallView(QAbstractScrollArea):
     def visible_range(self) -> tuple[int, int]:
         v = self.verticalScrollBar().value()
         bot = v + self.viewport().height()
-        first = last = -1
-        for idx, cell in enumerate(self._cells):
-            if cell is None:
-                continue
-            if cell.bottom() >= v and cell.y() <= bot:
-                if first < 0:
-                    first = idx
-                last = idx
-        return (first if first >= 0 else 0, last)
+        first_row, last_row = self._visible_rows(v, bot)
+        if last_row < first_row:
+            return (0, -1)
+        return (self._rows[first_row][1], self._rows[last_row][2])
 
     def _on_scroll(self, *_a) -> None:
         self.update()
@@ -259,17 +290,26 @@ class WallView(QAbstractScrollArea):
     # ---------------- 绘制 ----------------
     def paintEvent(self, event) -> None:
         p = QPainter(self.viewport())
-        p.fillRect(self.viewport().rect(), QColor("#202124"))
+        p.fillRect(self.viewport().rect(), QColor(BG_APP))
         v = self.verticalScrollBar().value()
         p.translate(0, -v)
         view_top, view_bot = v, v + self.viewport().height()
         tier = 512 if self.row_height > 256 else 256
-        for idx, (item, cell) in enumerate(zip(self._items, self._cells)):
-            if cell is None or cell.bottom() < view_top or cell.y() > view_bot:
+        # 只遍历可见行（原实现每帧遍历全部 items，2 万张时约 9.5ms 纯循环开销）
+        first_row, last_row = self._visible_rows(view_top, view_bot)
+        if last_row < first_row:
+            p.end()
+            return
+        start = self._rows[first_row][1]
+        end = self._rows[last_row][2]
+        for idx in range(start, end + 1):
+            item = self._items[idx]
+            cell = self._cells[idx]
+            if cell is None:
                 continue
             if item.corrupted:
-                p.fillRect(cell, QColor("#3a3b3e"))
-                p.setPen(QColor("#e57373"))
+                p.fillRect(cell, QColor(BG_CORRUPTED))
+                p.setPen(QColor(DANGER))
                 p.drawText(cell, Qt.AlignmentFlag.AlignCenter, "已损坏")
             else:
                 # 已按目标像素裁好缓存：命中则直接贴图，
@@ -298,17 +338,17 @@ class WallView(QAbstractScrollArea):
                     sy = (scaled.height() - cell.height()) // 2
                     p.drawPixmap(cell, scaled, QRect(sx, sy, cell.width(), cell.height()))
                 else:
-                    p.fillRect(cell, QColor("#2c2d31"))
+                    p.fillRect(cell, QColor(BG_CARD_HOVER))
             if item.favorite:
                 f = p.font()
                 f.setBold(True)
                 f.setPixelSize(15)
                 p.setFont(f)
-                p.setPen(QColor("#ffd54f"))
+                p.setPen(QColor(STAR))
                 p.drawText(QRect(cell.x() + 4, cell.y() + 2, 20, 20),
                            Qt.AlignmentFlag.AlignCenter, "★")
             if item.dup_group >= 0:
-                p.setBrush(QColor("#1e88e5"))
+                p.setBrush(QColor(DUP))
                 p.setPen(Qt.PenStyle.NoPen)
                 badge = QRect(cell.right() - 20, cell.y() + 4, 16, 16)
                 p.drawEllipse(badge)
@@ -320,13 +360,13 @@ class WallView(QAbstractScrollArea):
                 p.drawText(badge, Qt.AlignmentFlag.AlignCenter, "重")
             if idx == self._focus:
                 pen = p.pen()
-                p.setPen(QColor("#8ab4f8"))
+                p.setPen(QColor(ACCENT))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(cell.adjusted(1, 1, -1, -1))
                 p.setPen(pen)
             if idx in self.selection:
                 pen = p.pen()
-                p.setPen(QColor("#ffd54f"))
+                p.setPen(QColor(STAR))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(cell.adjusted(2, 2, -2, -2))
                 p.setPen(pen)

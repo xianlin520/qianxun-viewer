@@ -1,3 +1,8 @@
+/* ===== 与 src/ui/theme.py 同步的色值约定 =====
+   自绘代码用 theme.py 常量，此处用同一批值：
+   背景 #202124 / 卡片 #26272b / 悬停 #2c2d31 / 边框 #3a3b3e
+   主文字 #e8eaed / 次文字 #c7cbd4 / 弱文字 #8a8f98
+   强调 #8ab4f8 / 重复标 #1e88e5 / 危险 #e57373 / 成功 #81c784 */
 /* 千寻影集 - 暗色主题 */
 QWidget {
     background-color: #202124;
@@ -20,8 +25,8 @@ QPushButton {
 QPushButton:hover { background: #4a4b4e; }
 QPushButton:pressed { background: #55565a; }
 QPushButton:checked {
-    background: #0b57d0;
-    border-color: #0b57d0;
+    background: #31406b;
+    border-color: #31406b;
     color: #ffffff;
 }
 QPushButton:disabled { color: #77797d; background: #2c2d30; }
@@ -34,7 +39,7 @@ QComboBox, QLineEdit, QSpinBox {
 }
 QComboBox QAbstractItemView {
     background: #2c2d30;
-    selection-background-color: #0b57d0;
+    selection-background-color: #31406b;
     border: 1px solid #4a4b4e;
 }
 QComboBox::drop-down { border: none; width: 18px; }
@@ -57,7 +62,7 @@ QCheckBox::indicator {
     border-radius: 3px;
     background: #3a3b3e;
 }
-QCheckBox::indicator:checked { background: #0b57d0; border-color: #0b57d0; }
+QCheckBox::indicator:checked { background: #31406b; border-color: #31406b; }
 QStatusBar { background: #292a2d; color: #c7cbd4; }
 QListView { background: #202124; border: none; outline: none; }
 QScrollBar:vertical {
@@ -83,7 +88,7 @@ QMenu {
     padding: 4px;
 }
 QMenu::item { padding: 5px 24px; border-radius: 3px; }
-QMenu::item:selected { background: #0b57d0; }
+QMenu::item:selected { background: #31406b; }
 QDialog, QScrollArea { background: #202124; }
 QLabel { background: transparent; }
 QToolTip {

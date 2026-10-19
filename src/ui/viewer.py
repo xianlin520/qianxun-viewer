@@ -7,9 +7,10 @@
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtCore import QPoint, QPointF, QRect, Qt
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import QPushButton, QWidget
+from .theme import BG_VIEWER, FG_PRIMARY
 
 
 class ViewerOverlay(QWidget):
@@ -129,7 +130,7 @@ class ViewerOverlay(QWidget):
     # ---------------- 绘制 ----------------
     def paintEvent(self, event) -> None:
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor("#101112"))
+        p.fillRect(self.rect(), QColor(BG_VIEWER))
         if not self._pix.isNull():
             p.translate(QPointF(self.rect().center()) + self._offset)
             p.scale(self._scale, self._scale)
@@ -140,11 +141,17 @@ class ViewerOverlay(QWidget):
             p.resetTransform()
         if 0 <= self._index < len(self.controller.view_items):
             item = self.controller.view_items[self._index]
-            p.setPen(QColor("#e8eaed"))
             star = "  ★" if item.favorite else ""
-            p.drawText(12, 24, f"{item.path.name}{star}    "
-                               f"{self._index + 1}/{len(self.controller.view_items)}    "
-                               f"缩放 {self._scale * 100:.0f}%")
+            text = (f"{item.path.name}{star}    "
+                    f"{self._index + 1}/{len(self.controller.view_items)}    "
+                    f"缩放 {self._scale * 100:.0f}%")
+            # 先在文字下方铺一条半透明黑底：浅色/白色图片上纯白字几乎看不清
+            fm = p.fontMetrics()
+            tw = fm.horizontalAdvance(text)
+            p.fillRect(QRect(0, 0, min(self.width(), tw + 24), 34),
+                       QColor(0, 0, 0, 130))
+            p.setPen(QColor(FG_PRIMARY))
+            p.drawText(12, 24, text)
         p.end()
 
     # ---------------- 交互 ----------------

@@ -80,10 +80,10 @@ class ThumbWorker(QRunnable):
                     self.oss.download_to(self.item.remote_key, out,
                                          thumb=self.size)
                 except Exception:
-                    self.signals.failed.emit(str(self.item.path), self.size)
+                    _emit(self.signals.failed, str(self.item.path), self.size)
                     return
             ph = thumbnail.phash_of_file(out) if self.with_phash else ""
-            self.signals.ready.emit(str(self.item.path), self.size, str(out), ph)
+            _emit(self.signals.ready, str(self.item.path), self.size, str(out), ph)
             return
         out, ph = thumbnail.generate(self.image_root, self.item, self.size, self.with_phash)
         if out is not None:
@@ -216,10 +216,10 @@ class ListWorker(QRunnable):
             for i in range(0, len(rows), 64):
                 if self.is_cancelled and self.is_cancelled():
                     return
-                self.signals.batch.emit(rows[i:i + 64])
-            self.signals.finished.emit(len(rows))
+                _emit(self.signals.batch, rows[i:i + 64])
+            _emit(self.signals.finished, len(rows))
         except Exception as exc:
-            self.signals.failed.emit(str(exc))
+            _emit(self.signals.failed, str(exc))
 
 
 class UploadSignals(QObject):
@@ -275,12 +275,12 @@ class UploadWorker(QRunnable):
                     counter["dirty"] = 0
             if flush:
                 self.index.save()
-            self.signals.progress.emit(d, total, local.name)
+            _emit(self.signals.progress, d, total, local.name)
 
         with ThreadPoolExecutor(self.threads) as ex:
             list(ex.map(one, self.tasks))
         self.index.save()   # 收尾兜底：中断/取消时也要保住已成功的索引
-        self.signals.finished.emit(counter["up"], counter["fail"])
+        _emit(self.signals.finished, counter["up"], counter["fail"])
 
 
 class MoveSignals(QObject):

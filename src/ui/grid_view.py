@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QListView, QStyledItemDelegate, QStyle
 
 from ..core import thumbnail
 from ..utils.format import human_size, human_time
+from .theme import BG_CARD, BG_CARD_HOVER, BG_CARD_SEL, BG_CORRUPTED, BG_PLACEHOLDER, DANGER, DUP, FG_MUTED, FG_SECONDARY, STAR, SUCCESS
 
 ROLE_ITEM = Qt.ItemDataRole.UserRole + 1
 INFO_H = 24
@@ -106,11 +107,11 @@ class ThumbDelegate(QStyledItemDelegate):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         if option.state & QStyle.StateFlag.State_Selected:
-            painter.setBrush(QColor("#31406b"))
+            painter.setBrush(QColor(BG_CARD_SEL))
         elif option.state & QStyle.StateFlag.State_MouseOver:
-            painter.setBrush(QColor("#2c2d31"))
+            painter.setBrush(QColor(BG_CARD_HOVER))
         else:
-            painter.setBrush(QColor("#26272b"))
+            painter.setBrush(QColor(BG_CARD))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(r, 6, 6)
 
@@ -118,8 +119,8 @@ class ThumbDelegate(QStyledItemDelegate):
                          r.width() - PAD * 2,
                          r.height() - PAD * 2 - INFO_H - (BUTTON_H if self.show_buttons else 0))
         if item.corrupted:
-            painter.fillRect(img_rect, QColor("#3a3b3e"))
-            painter.setPen(QColor("#e57373"))
+            painter.fillRect(img_rect, QColor(BG_CORRUPTED))
+            painter.setPen(QColor(DANGER))
             painter.drawText(img_rect, Qt.AlignmentFlag.AlignCenter, "已损坏")
         else:
             tier = 512 if self.thumb_size > 256 else 256
@@ -135,20 +136,26 @@ class ThumbDelegate(QStyledItemDelegate):
                         if not pix.isNull():
                             QPixmapCache.insert(key, pix)
             if pix is not None and not pix.isNull():
-                scaled = pix.scaled(img_rect.size(),
-                                    Qt.AspectRatioMode.KeepAspectRatio,
-                                    Qt.TransformationMode.SmoothTransformation)
+                # 缩放结果按「指纹+档位+目标尺寸」缓存，
+                # 避免每帧对每张可见卡片重做一次 SmoothTransformation
+                skey = f"{key}|{img_rect.width()}x{img_rect.height()}|k"
+                scaled = QPixmapCache.find(skey)
+                if scaled is None or scaled.isNull():
+                    scaled = pix.scaled(img_rect.size(),
+                                        Qt.AspectRatioMode.KeepAspectRatio,
+                                        Qt.TransformationMode.SmoothTransformation)
+                    QPixmapCache.insert(skey, scaled)
                 x = img_rect.x() + (img_rect.width() - scaled.width()) // 2
                 y = img_rect.y() + (img_rect.height() - scaled.height()) // 2
                 painter.drawPixmap(x, y, scaled)
             else:
-                painter.fillRect(img_rect, QColor("#333438"))
-                painter.setPen(QColor("#8a8f98"))
+                painter.fillRect(img_rect, QColor(BG_PLACEHOLDER))
+                painter.setPen(QColor(FG_MUTED))
                 painter.drawText(img_rect, Qt.AlignmentFlag.AlignCenter, "…")
 
         if item.favorite:
             painter.save()          # 角标会改字体，必须成对 save/restore，
-            painter.setPen(QColor("#ffd54f"))   # 否则下方信息行字号被污染
+            painter.setPen(QColor(STAR))   # 否则下方信息行字号被污染
             f = painter.font()
             f.setBold(True)
             f.setPixelSize(15)
@@ -158,7 +165,7 @@ class ThumbDelegate(QStyledItemDelegate):
             painter.restore()
         if item.dup_group >= 0:
             painter.save()
-            painter.setBrush(QColor("#1e88e5"))
+            painter.setBrush(QColor(DUP))
             painter.setPen(Qt.PenStyle.NoPen)
             badge = QRect(r.right() - 20, r.y() + 4, 16, 16)
             painter.drawEllipse(badge)
@@ -172,7 +179,7 @@ class ThumbDelegate(QStyledItemDelegate):
 
         info_rect = QRect(r.x() + 2, r.bottom() - INFO_H + 2 - (BUTTON_H if self.show_buttons else 0),
                           r.width() - 4, INFO_H - 4)
-        painter.setPen(QColor("#c7cbd4"))
+        painter.setPen(QColor(FG_SECONDARY))
         fm = painter.fontMetrics()
         text = fm.elidedText(index.model().info_text(item),
                              Qt.TextElideMode.ElideMiddle, info_rect.width())
@@ -180,14 +187,14 @@ class ThumbDelegate(QStyledItemDelegate):
 
         for action, brect in self.button_rects(r):
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#3a3b3e"))
+            painter.setBrush(QColor(BG_CORRUPTED))
             painter.drawRoundedRect(brect, 4, 4)
             if action == "fav" and item.favorite:
-                painter.setPen(QColor("#ffd54f"))
+                painter.setPen(QColor(STAR))
             elif action in ("remove", "restore"):
-                painter.setPen(QColor("#e57373") if action == "remove" else QColor("#81c784"))
+                painter.setPen(QColor(DANGER) if action == "remove" else QColor(SUCCESS))
             else:
-                painter.setPen(QColor("#c7cbd4"))
+                painter.setPen(QColor(FG_SECONDARY))
             painter.drawText(brect, Qt.AlignmentFlag.AlignCenter, self.glyph(action))
         painter.restore()
 

@@ -87,6 +87,8 @@ class LibraryController(QObject):
         self._pending_page: int | None = None   # 启动时待恢复的期望页码
         self.per_page = 1
         self._seed_extra = 0
+        self._rand_order: dict[str, float] = {}   # 随机序固化：路径 → 排序键
+        self._rand_seed: int | None = None        # 当前随机序对应的种子
         self._by_path: dict[str, ImageItem] = {}
         self._queued: set[tuple[str, int]] = set()
         self._pending_thumbs = 0
@@ -313,10 +315,27 @@ class LibraryController(QObject):
         elif m == "size_desc":
             items.sort(key=lambda i: i.size_bytes, reverse=True)
         else:
-            # 固定种子：同目录同批加载结果稳定；"重新随机"换种子
+            # 随机序按「路径 → 序号」固化：原实现每次刷新都对当前列表整体
+            # shuffle，删掉一张后下标全变，整屏图都会换位置。
+            # 现在只在新增图片时补号，删图不影响其余项的相对顺序。
             seed = (zlib.crc32(str(self.root).encode("utf-8", "surrogatepass"))
                     + self._seed_extra) & 0xFFFFFFFF
-            random.Random(seed).shuffle(items)
+            order = self._rand_order
+            if self._rand_seed != seed:
+                # 只有「重新随机」(种子变化) 或首次进入目录才重建随机序；
+                # 删图/增图只是让映射多/少一项，不能整体重排
+                self._rand_seed = seed
+                rnd = random.Random(seed)
+                order.clear()
+                for it in items:
+                    order[str(it.path)] = rnd.random()
+            missing = [str(it.path) for it in items if str(it.path) not in order]
+            if missing:
+                for p in missing:
+                    order[p] = (zlib.crc32(
+                        (p + str(seed)).encode("utf-8", "surrogatepass"))
+                        & 0xFFFFFFFF) / 2 ** 32
+            items.sort(key=lambda i: order.get(str(i.path), 0.0))
         return items
 
     def _apply_to_model(self) -> None:

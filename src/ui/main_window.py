@@ -267,7 +267,9 @@ class MainWindow(QWidget):
 
     def _on_slider(self, value: int) -> None:
         self.wall.row_height = value
-        self.wall.relayout()
+        # 拖动滑块会连续触发 valueChanged：合并成一次重排，
+        # 否则每次移动都跑一遍全量 justified 贪心（2 万张约 103ms）
+        self.wall._relayout_timer.start()
 
     def _on_folder_changed(self, idx: int) -> None:
         if idx <= 0:
