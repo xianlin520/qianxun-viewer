@@ -119,6 +119,12 @@ class DecodeWorker(QRunnable):
                 _emit(self.signals.failed, str(self.item.path), "下载原图失败")
                 return
             im = thumbnail.decode_original(dest)
+            # 原图临时缓存无上限会一直涨（本机实测已 753MB），解码完做一次 LRU 淘汰
+            try:
+                from ..core.oss_service import trim_originals
+                trim_originals(keep=dest)
+            except Exception:
+                pass
         else:
             im = thumbnail.decode_original(self.item.path)
         if im is None:

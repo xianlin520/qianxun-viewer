@@ -19,4 +19,6 @@ class ImageItem:
     favorite: bool = False
     dup_group: int = -1   # 重复组编号
     corrupted: bool = False
+    thumb_failures: int = 0   # 缩略图生成失败次数（>=3 才认定为损坏）
     remote_key: str = ""  # 在线项的 OSS object key（非空=在线项）
+    _folder_cache: str | None = None   # 相对父目录缓存（子文件夹筛选用）

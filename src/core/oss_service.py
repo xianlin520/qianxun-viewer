@@ -25,6 +25,51 @@ def app_data_dir() -> Path:
     return d
 
 
+ORIGINALS_MAX_BYTES = 2 * 1024 ** 3   # 在线原图临时缓存上限 2GB
+
+
+def trim_originals(keep: Path | None = None,
+                   max_bytes: int = ORIGINALS_MAX_BYTES) -> int:
+    """在线原图临时缓存的 LRU 清理，返回删除的文件数。
+
+    看大图时每张原图都会落到 originals/，此前没有任何上限与清理入口
+    （实测本机已无声增长到 753MB）。这里按访问时间从旧到新淘汰，
+    保留刚用过的那张（keep）以及总量不超过 max_bytes 的部分。"""
+    d = app_data_dir() / "originals"
+    if not d.exists():
+        return 0
+    files = []
+    total = 0
+    try:
+        for f in d.iterdir():
+            if not f.is_file():
+                continue
+            try:
+                st = f.stat()
+            except OSError:
+                continue
+            total += st.st_size
+            files.append((st.st_atime, st.st_size, f))
+    except OSError:
+        return 0
+    if total <= max_bytes:
+        return 0
+    files.sort()                       # 最久未访问的排在前面
+    removed = 0
+    for _at, size, f in files:
+        if total <= max_bytes:
+            break
+        if keep is not None and f == keep:
+            continue
+        try:
+            f.unlink()
+            total -= size
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
 def oss_region(endpoint: str) -> str:
     """从 Endpoint 推导 OSS 地域：oss-cn-qingdao.aliyuncs.com → cn-qingdao。
 
@@ -105,15 +150,32 @@ class OssIndex:
     def load(self) -> None:
         try:
             self.data = json.loads(self.path.read_text("utf-8"))
+            if not isinstance(self.data, dict):
+                self.data = {}
         except Exception:
+            # 文件损坏时备份而不是静默丢弃：用户至少要能从 .corrupt 里找回线索
+            try:
+                if self.path.exists():
+                    self.path.replace(
+                        self.path.with_suffix(self.path.suffix + ".corrupt"))
+            except OSError:
+                pass
             self.data = {}
 
     def save(self) -> None:
+        """原子写入：先写临时文件再 os.replace。
+
+        原来的 write_text 会先截断目标文件，上传中被强杀/断电就会留下半个
+        JSON，下次 load() 解析失败按「空索引」处理 —— 用户会静默地全库重传。"""
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
         try:
-            self.path.write_text(
-                json.dumps(self.data, ensure_ascii=False), "utf-8")
+            tmp.write_text(json.dumps(self.data, ensure_ascii=False), "utf-8")
+            os.replace(tmp, self.path)
         except OSError:
-            pass
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     @staticmethod
     def make_key(rel: str) -> str:

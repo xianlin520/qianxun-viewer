@@ -39,8 +39,11 @@ class CacheDialog(QDialog):
         n, b = self.controller.cache_info()
         root = self.controller.cache_root
         loc = thumbnail.cache_root_for(root) if root else "—"
+        on, ob = self.controller.originals_info()
         self.label.setText(f"本地缓存目录：{loc}\n"
-                           f"共 {n} 个文件 · 占用 {human_size(b)}\n"
+                           f"缩略图：{n} 个文件 · 占用 {human_size(b)}\n"
+                           f"在线原图临时缓存：{on} 个文件 · 占用 {human_size(ob)}"
+                           f"（上限 2 GB，超出自动淘汰）\n"
                            f"（缓存不写入图片目录，云同步不产生流量）")
 
     def _clean_orphans(self) -> None:

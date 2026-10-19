@@ -8,10 +8,10 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut, QIcon, QActionGroup
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QLabel,
-                               QLineEdit, QMenu, QMessageBox, QPushButton,
-                               QSlider, QStatusBar, QToolBar, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QLabel,
+                               QLineEdit, QMenu, QMessageBox, QPlainTextEdit,
+                               QPushButton, QSlider, QStatusBar, QTextEdit,
+                               QToolBar, QVBoxLayout, QWidget)
 
 from .. import meta
 from ..controllers import ASPECT_PRESETS, SORT_MODES, LibraryController
@@ -71,7 +71,7 @@ class MainWindow(QWidget):
                                             self.delegate, self.settings)
         self.viewer = ViewerOverlay(self, self.controller)
         self._pressed_single: set[int] = set()
-        self._last_click_row = -1
+        self._last_click_key: tuple | None = None
         self._ratio_hinted = False
         self._wire()
         self._restore_state()
@@ -229,9 +229,18 @@ class MainWindow(QWidget):
                 self._selected_items()[0])))
 
     def _guard(self, fn):
+        """全局快捷键守卫：大图打开或正在输入框里时一律让位。
+
+        - QShortcut 是窗口级快捷键，匹配先于控件自身按键处理；
+        - QLineEdit 只遮挡普通字符键，不遮挡 Ctrl+S / Ctrl+O 这类组合键，
+          结果在搜索框里按 Ctrl+S 会对着旧选择静默另存一张图。"""
         def wrapper():
-            if not self.viewer.isVisible():
-                fn()
+            if self.viewer.isVisible():
+                return
+            fw = QApplication.focusWidget()
+            if isinstance(fw, (QLineEdit, QTextEdit, QPlainTextEdit)):
+                return
+            fn()
         return wrapper
 
     # ---------------- 视图模式 / 垃圾桶 ----------------
@@ -399,6 +408,13 @@ class MainWindow(QWidget):
         if e.mimeData().hasUrls():
             e.acceptProposedAction()
 
+    def dragMoveEvent(self, e) -> None:
+        """必须重写：QWidget 默认的 dragMoveEvent 不 accept，
+        Qt 会据此取消整次拖拽，导致 dropEvent 永远不被派发
+        （表现为：拖进来有可放置光标，松手却什么都没发生）。"""
+        if e.mimeData().hasUrls():
+            e.acceptProposedAction()
+
     def dropEvent(self, e) -> None:
         for url in e.mimeData().urls():
             p = Path(url.toLocalFile())
@@ -505,18 +521,26 @@ class MainWindow(QWidget):
         self._pressed_single = rows          # 按下前的单图选择（可能为空）
 
     def _on_clicked(self, index) -> None:
-        """再次点击同一张（且它是唯一选中项）才进大图。"""
+        """再次点击同一张（且它是唯一选中项）才进大图。
+
+        必须用「路径 + 当前页码」而不是行号记忆：翻页/换目录/改排序后
+        行号会指向另一张图，用行号会导致第 2 页点第一张就直接开图。"""
         if index is None or not index.isValid():
             return
         rows = {i.row() for i in self.view.selectedIndexes()}
         if rows != {index.row()}:
-            self._last_click_row = -1        # 多选或不在该行：不进入
+            self._last_click_key = None      # 多选或点空：不进入
             return
-        if self._last_click_row == index.row():
-            self._last_click_row = -1
+        items = self.model.items()
+        if index.row() >= len(items):
+            return
+        key = (str(items[index.row()].path), self.controller.page,
+               self.controller.view_mode)
+        if self._last_click_key == key:
+            self._last_click_key = None
             self._open_viewer_at(index.row())
         else:
-            self._last_click_row = index.row()
+            self._last_click_key = key
 
     def _open_viewer_at(self, model_row: int) -> None:
         items = self.model.items()

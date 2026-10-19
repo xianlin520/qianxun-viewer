@@ -5,8 +5,10 @@
 from __future__ import annotations
 
 import math
+import os
 import random
 import shutil
+import time
 import zlib
 from collections import deque
 from pathlib import Path
@@ -82,6 +84,7 @@ class LibraryController(QObject):
         self.fav_only = False
         self.view_mode = settings.view_mode or "scroll"
         self.page = 0
+        self._pending_page: int | None = None   # 启动时待恢复的期望页码
         self.per_page = 1
         self._seed_extra = 0
         self._by_path: dict[str, ImageItem] = {}
@@ -120,8 +123,21 @@ class LibraryController(QObject):
         self._reload_timer = QTimer(self)
         self._reload_timer.setSingleShot(True)
         self._reload_timer.setInterval(800)
-        self._reload_timer.timeout.connect(self.reload_current)
+        self._reload_timer.timeout.connect(self._on_dir_changed_settled)
         self._watcher.directoryChanged.connect(lambda _p: self._reload_timer.start())
+        # 程序自身写入的元数据（favorites.json / .qx_removed.json / Remove 内的移动）
+        # 会让图片根目录 mtime 变化，若不加抑制，收藏一张或移出一张就会触发整库重扫，
+        # 连带把页码和文件夹筛选清空。
+        self._self_write_until = 0.0
+
+    def _suppress_watch(self, seconds: float = 2.0) -> None:
+        """标记「接下来这段时间的目录变化是程序自己造成的」，不触发重扫。"""
+        self._self_write_until = time.monotonic() + seconds
+
+    def _on_dir_changed_settled(self) -> None:
+        if time.monotonic() < self._self_write_until:
+            return
+        self.reload_current()
 
     def _track(self, w) -> None:
         """保持 worker 的 Python 引用至其信号发出完毕。"""
@@ -152,6 +168,7 @@ class LibraryController(QObject):
         # 换库时页码/筛选必须复位：否则新库沿用旧页码会停在空页，
         # 旧的文件夹筛选也可能匹配不到任何东西
         self.page = 0
+        self._pending_page = None      # 换库时不保留启动恢复的期望页码
         self.folder_filter = ""
         self._warm_queue.clear()
         self._warm_pending.clear()
@@ -219,9 +236,13 @@ class LibraryController(QObject):
             items = [i for i in items if kw in i.path.name.lower()]
         if self.folder_filter:
             ff = self.folder_filter
-            items = [i for i in items
-                     if self._item_folder(i) == ff
-                     or self._item_folder(i).startswith(ff + "/")]
+            prefix = ff + "/"
+            kept = []
+            for i in items:
+                f = self._item_folder(i)      # 每项只算一次（原实现调用了两次）
+                if f == ff or f.startswith(prefix):
+                    kept.append(i)
+            items = kept
         if self.aspect_target is not None:
             t = self.aspect_target
             items = [i for i in items
@@ -240,17 +261,32 @@ class LibraryController(QObject):
 
     # ---------------- 子文件夹筛选 ----------------
     def _item_folder(self, item) -> str:
-        """返回项的相对父目录（posix）；在线项用 object key 父路径。"""
+        """返回项的相对父目录（posix）；在线项用 object key 父路径。
+
+        性能要点：Path.resolve() 在 Windows 上要走 realpath 系统调用
+        （本机实测 1.92ms/次，比 os.path.abspath 慢约 1500 倍）。
+        这里改用 abspath + 前缀比较，并把基于 main_root 的结果缓存到 item 上，
+        否则千张库单次筛选要几秒。"""
         if item.remote_key:
             return "/".join(item.remote_key.split("/")[:-1])
+        cached = getattr(item, "_folder_cache", None)
+        if cached is not None:
+            return cached
         base = self.main_root if not self.online_mode else None
-        if base is not None:
-            try:
-                return item.path.resolve().relative_to(
-                    base.resolve()).parent.as_posix()
-            except ValueError:
+        if base is None:
+            return ""
+        try:
+            base_abs = os.path.abspath(str(base))
+            p_abs = os.path.abspath(str(item.path))
+            rel = os.path.relpath(p_abs, base_abs)
+            if rel.startswith(".."):
                 return ""
-        return ""
+            parent = os.path.dirname(rel)
+            rel_parent = "" if parent in ("", ".") else parent.replace("\\", "/")
+        except (ValueError, OSError):
+            rel_parent = ""
+        item._folder_cache = rel_parent
+        return rel_parent
 
     def available_folders(self) -> list:
         """所有相对父目录及其祖先，排序返回。"""
@@ -290,6 +326,15 @@ class LibraryController(QObject):
         if self.view_mode == "page":
             self.per_page = max(1, self.view.page_capacity())
             total = max(1, -(-len(self.view_items) // self.per_page))
+            # 扫描是分批到达的：首批可能只够 1 页，直接夹取会把「上次页码」
+            # 就地压成 0 且再也回不来。用 _pending_page 记住期望值，
+            # 等总页数够大时再落地。
+            if self._pending_page is not None:
+                if total - 1 >= self._pending_page:
+                    self.page = self._pending_page
+                    self._pending_page = None
+                else:
+                    total = total          # 页数还不够，先停在第 0 页
             self.page = max(0, min(self.page, total - 1))
             shown = self.view_items[self.page * self.per_page:(self.page + 1) * self.per_page]
             self.model.set_items(shown)
@@ -297,6 +342,11 @@ class LibraryController(QObject):
         else:
             self.model.set_items(self.view_items)
         self.view_reset.emit()
+
+    def restore_page(self, page: int) -> None:
+        """启动时恢复上次页码：记为期望值，待扫描出足够页数后生效。"""
+        self._pending_page = max(0, int(page))
+        self._apply_to_model()
 
     def set_sort(self, mode: str) -> None:
         self.sort_mode = mode
@@ -408,7 +458,12 @@ class LibraryController(QObject):
         self._warm_done(path_str, size)
         item = self._by_path.get(path_str)
         if item is not None:
-            item.corrupted = True
+            # 单次失败可能只是网络盘抖动 / 磁盘暂时不可写。
+            # 直接标 corrupted 会被 _submit_thumb 永久跳过（该图再也不重试、
+            # 不上传、不查重），所以按次数累计，超过阈值才认定为损坏。
+            item.thumb_failures = getattr(item, "thumb_failures", 0) + 1
+            if item.thumb_failures >= 3:
+                item.corrupted = True
             self._repaint_row(path_str)
             self.wall_update.emit()
 
@@ -422,6 +477,7 @@ class LibraryController(QObject):
         if self.favorites is None or self.trash_mode:
             return
         item.favorite = self.favorites.toggle(item.path)
+        self._suppress_watch()      # favorites.json 写在库根，别触发整库重扫
         self._repaint_row(str(item.path))
         self.wall_update.emit()
         if self.fav_only and not item.favorite:
@@ -433,6 +489,12 @@ class LibraryController(QObject):
         if self.online_mode or item.remote_key:
             self.status.emit("在线模式不支持移出，云端删除请到 OSS 控制台操作", 5000)
             return
+        if self.trash_mode:
+            # 垃圾桶里的文件已经在 Remove/ 内，再移出会把它在 Remove/ 里改名，
+            # 并往 .qx_removed.json 写一条指向 Remove/ 的原路径，还原就乱了
+            self.status.emit("垃圾桶内的图片请用「还原」，不要再次移出", 4000)
+            return
+        self._suppress_watch()      # 移出会改库根目录，别触发整库重扫
         w = MoveWorker(item.path, self.main_root or self.root)
         w.signals.finished.connect(self._on_moved)
         w.signals.failed.connect(lambda p, m: self.status.emit(f"移出失败：{m}", 5000))
@@ -465,6 +527,7 @@ class LibraryController(QObject):
             self.load_directory(self.main_root)
 
     def restore_item(self, item) -> None:
+        self._suppress_watch()
         w = MoveWorker(item.path, self.main_root or self.root, restore=True)
         w.signals.finished.connect(self._on_restored)
         w.signals.failed.connect(lambda p, m: self.status.emit(f"还原失败：{m}", 5000))
@@ -751,12 +814,15 @@ class LibraryController(QObject):
         return w, len(tasks), skipped
 
     def _rel_key(self, item) -> str:
-        """本地项对应的云端对象 key（与上传路径同一规则）。"""
+        """本地项对应的云端对象 key（与上传路径同一规则）。
+
+        不在库内的文件（`relative_to` 失败）**绝不退化成文件名**：
+        不同子目录下的同名图会算出同一个 key（qx/x.jpg），上传时互相覆盖。"""
         try:
             rel = item.path.resolve().relative_to(
                 self.main_root.resolve()).as_posix()
         except (ValueError, AttributeError):
-            rel = item.path.name
+            return ""      # 调用方需处理空 key（跳过并提示），不能猜
         return OssIndex.make_key(rel)
 
     def resolve_cloud_key(self, item):
@@ -773,9 +839,14 @@ class LibraryController(QObject):
         if self._cloud_keys is None:
             try:
                 self._cloud_keys = oss.list_keys()
-            except Exception:
-                self._cloud_keys = set()
+            except Exception as exc:
+                # 不要把「列举失败」降级成「云盘为空」并永久缓存：
+                # 那会让之后所有分享都误报「尚未上传」。保持 None 以便下次重试。
+                self.status.emit(f"云端清单获取失败：{friendly_error(exc)}", 6000)
+                return None
         key = self._rel_key(item)
+        if not key:
+            return None
         if key in self._cloud_keys:
             self.oss_index.put(thumbnail.cache_key(item), key,
                                item.size_bytes, item.mtime)
@@ -836,6 +907,9 @@ class LibraryController(QObject):
             return False
         ck = thumbnail.cache_key(item)
         key = self._rel_key(item)
+        if not key:
+            self.status.emit("该图片不在当前图库目录内，无法确定云端路径", 5000)
+            return False
         w = UploadWorker(oss, self.oss_index, [(item.path, key[len("qx/"):], ck)],
                          is_cancelled=self.is_cancelled, threads=1)
         loop = QEventLoop()
@@ -873,8 +947,12 @@ class LibraryController(QObject):
         return n, b
 
     def clean_cache_orphans(self) -> int:
-        """删除当前库中已不存在图片的孤儿缓存，返回删除数。"""
-        if self.cache_root is None:
+        """删除当前库中已不存在图片的孤儿缓存，返回删除数。
+
+        安全前置：垃圾桶模式下 cache_root 仍是主库，而 all_items 只有 Remove/
+        里的几张——此时算出的 valid 集合极小，会把主库全部缓存误判为孤儿删光。
+        扫描未完成时同理（还没扫到的图片会被当成已删除）。"""
+        if self.cache_root is None or self.trash_mode or not self._scan_finished:
             return 0
         valid = {thumbnail.cache_key(it) for it in self.all_items}
         removed = 0
@@ -897,6 +975,25 @@ class LibraryController(QObject):
         if self.cache_root is not None:
             shutil.rmtree(thumbnail.cache_root_for(self.cache_root),
                           ignore_errors=True)
+        # 在线原图临时缓存也一起清掉（此前完全没有清理入口）
+        from .core.oss_service import app_data_dir
+        shutil.rmtree(app_data_dir() / "originals", ignore_errors=True)
+
+    def originals_info(self) -> tuple[int, int]:
+        """在线原图临时缓存的 (文件数, 总字节)。"""
+        from .core.oss_service import app_data_dir
+        d = app_data_dir() / "originals"
+        n = b = 0
+        if not d.exists():
+            return 0, 0
+        try:
+            for f in d.iterdir():
+                if f.is_file():
+                    n += 1
+                    b += f.stat().st_size
+        except OSError:
+            pass
+        return n, b
 
     def _on_dups(self, groups) -> None:
         for gi, g in enumerate(groups):

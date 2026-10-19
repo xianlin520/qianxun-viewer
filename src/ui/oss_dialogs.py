@@ -80,17 +80,21 @@ class UploadDialog(QDialog):
         lay.addWidget(self.bar)
         row = QHBoxLayout()
         btn_cfg = QPushButton("配置 OSS")
-        btn_cfg.clicked.connect(
-            lambda: OssConfigDialog(controller.settings, self).exec())
-        btn_start = QPushButton("开始增量上传")
-        btn_start.clicked.connect(self._start)
+        btn_cfg.clicked.connect(self._config)
+        self.btn_start = QPushButton("开始增量上传")
+        self.btn_start.clicked.connect(self._start)
         btn_close = QPushButton("关闭")
         btn_close.clicked.connect(self.accept)
         row.addWidget(btn_cfg)
-        row.addWidget(btn_start)
+        row.addWidget(self.btn_start)
         row.addWidget(btn_close)
         lay.addLayout(row)
+        self._running = False
         self._refresh()
+
+    def _config(self) -> None:
+        OssConfigDialog(self.controller.settings, self).exec()
+        self._refresh()          # 保存后刷新状态，否则仍显示「未配置 OSS」
 
     def _refresh(self) -> None:
         self.lbl.setText("已配置 OSS" if self.controller.oss_configured()
@@ -100,6 +104,8 @@ class UploadDialog(QDialog):
         self._refresh()
         if not self.controller.oss_configured():
             return
+        if getattr(self, "_running", False):
+            return                      # 防连点：否则同一个文件会被并发上传多次
         w, total, skipped = self.controller.create_upload_worker()
         if w is None:
             self.lbl.setText("当前无法上传（在线模式或未加载本地库）")
@@ -107,6 +113,8 @@ class UploadDialog(QDialog):
         if total == 0:
             self.lbl.setText(f"无需上传（跳过已传 {skipped} 项）")
             return
+        self._running = True
+        self.btn_start.setEnabled(False)
         self.bar.setRange(0, total)
         self.bar.setValue(0)
         w.signals.progress.connect(
@@ -116,5 +124,10 @@ class UploadDialog(QDialog):
             lambda up, fd: (self.bar.setValue(self.bar.maximum()),
                             self.lbl.setText(
                                 f"完成：新传 {up}，跳过已传 {skipped}"
-                                + (f"，失败 {fd}" if fd else ""))))
+                                + (f"，失败 {fd}" if fd else "")),
+                            self._done()))
         self.controller.pool.start(w)
+
+    def _done(self) -> None:
+        self._running = False
+        self.btn_start.setEnabled(True)

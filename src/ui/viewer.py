@@ -38,6 +38,9 @@ class ViewerOverlay(QWidget):
         self._btn_close.setToolTip("退出 (Esc)")
         for b in (self._btn_prev, self._btn_next, self._btn_rotate, self._btn_close):
             b.setFixedSize(40, 40)
+            # 关键：按钮不能抢焦点。否则点过一次「⟳」后焦点停在按钮上，
+            # ViewerOverlay.keyPressEvent 不再收到按键，←/→/R/Esc 全部失效
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._btn_prev.clicked.connect(lambda: self.show_index(self._index - 1))
         self._btn_next.clicked.connect(lambda: self.show_index(self._index + 1))
         self._btn_rotate.clicked.connect(self.rotate90)
@@ -109,9 +112,12 @@ class ViewerOverlay(QWidget):
         self.update()
 
     def _on_decoded(self, path_str, qimg) -> None:
-        if self._index < 0:
+        # 重扫/换库后 view_items 会被替换或变短，索引可能越界；
+        # 必须先校验，否则回调里直接取值会抛 IndexError
+        items = self.controller.view_items
+        if not (0 <= self._index < len(items)):
             return
-        cur = self.controller.view_items[self._index]
+        cur = items[self._index]
         if str(cur.path) == path_str:
             self._pix = QPixmap.fromImage(qimg)
             if not self._user_zoomed:

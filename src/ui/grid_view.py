@@ -123,7 +123,9 @@ class ThumbDelegate(QStyledItemDelegate):
             painter.drawText(img_rect, Qt.AlignmentFlag.AlignCenter, "已损坏")
         else:
             tier = 512 if self.thumb_size > 256 else 256
-            key = f"{item.path}|{tier}"
+            # key 用缓存指纹（含 size/mtime）：外部改了同名图片后能自动失效，
+            # 否则 F5 重建了磁盘缩略图、界面仍命中旧 pixmap
+            key = f"{thumbnail.cache_key(item)}|{tier}"
             pix = QPixmapCache.find(key)
             if pix is None or pix.isNull():
                 if self.image_root is not None:
@@ -145,14 +147,17 @@ class ThumbDelegate(QStyledItemDelegate):
                 painter.drawText(img_rect, Qt.AlignmentFlag.AlignCenter, "…")
 
         if item.favorite:
+            painter.save()          # 角标会改字体，必须成对 save/restore，
+            painter.setPen(QColor("#ffd54f"))   # 否则下方信息行字号被污染
             f = painter.font()
             f.setBold(True)
             f.setPixelSize(15)
             painter.setFont(f)
-            painter.setPen(QColor("#ffd54f"))
             painter.drawText(QRect(r.x() + 4, r.y() + 2, 20, 20),
                              Qt.AlignmentFlag.AlignCenter, "★")
+            painter.restore()
         if item.dup_group >= 0:
+            painter.save()
             painter.setBrush(QColor("#1e88e5"))
             painter.setPen(Qt.PenStyle.NoPen)
             badge = QRect(r.right() - 20, r.y() + 4, 16, 16)
@@ -163,6 +168,7 @@ class ThumbDelegate(QStyledItemDelegate):
             f.setPixelSize(10)
             painter.setFont(f)
             painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, "重")
+            painter.restore()
 
         info_rect = QRect(r.x() + 2, r.bottom() - INFO_H + 2 - (BUTTON_H if self.show_buttons else 0),
                           r.width() - 4, INFO_H - 4)

@@ -15,6 +15,17 @@ from PySide6.QtWidgets import QAbstractScrollArea
 from ..core import thumbnail
 
 
+def _wheel_delta(e) -> int:
+    """统一取滚轮增量。
+
+    鼠标滚轮给 angleDelta（1/8 度）；触控板/高精度设备只有 pixelDelta，
+    angleDelta 为 0。只读 angleDelta 会让触控板完全滚不动（且事件还被吞掉）。"""
+    d = e.angleDelta().y()
+    if d:
+        return d
+    return int(e.pixelDelta().y() * 3)   # 像素量级与角度量级不同，约 3 倍折算
+
+
 class WallView(QAbstractScrollArea):
     item_clicked = Signal(int)              # view_items 下标
     visible_range_changed = Signal(int, int)
@@ -129,16 +140,18 @@ class WallView(QAbstractScrollArea):
     # ---------------- 交互 ----------------
     def eventFilter(self, obj, e) -> bool:
         if obj is self.viewport() and e.type() == QEvent.Type.Wheel:
-            self._wheel_scroll(e.angleDelta().y())
+            self._wheel_scroll(_wheel_delta(e))
             return True
         return super().eventFilter(obj, e)
 
     def wheelEvent(self, e) -> None:
-        self._wheel_scroll(e.angleDelta().y())
+        self._wheel_scroll(_wheel_delta(e))
         e.accept()
 
     def _wheel_scroll(self, dy: int) -> None:
         # 图片墙加速滚动：每格滚轮至少滚动一行高度
+        if not dy:
+            return
         step = max(120, self.row_height)
         sb = self.verticalScrollBar()
         sb.setValue(sb.value() - int(dy / 120 * step))
@@ -261,10 +274,11 @@ class WallView(QAbstractScrollArea):
             else:
                 # 已按目标像素裁好缓存：命中则直接贴图，
                 # 避免每帧对每个可见格重复做一次 SmoothTransformation
-                skey = f"{item.path}|{tier}|{cell.width()}x{cell.height()}|c"
+                ck = thumbnail.cache_key(item)
+                skey = f"{ck}|{tier}|{cell.width()}x{cell.height()}|c"
                 scaled = QPixmapCache.find(skey)
                 if scaled is None or scaled.isNull():
-                    key = f"{item.path}|{tier}"
+                    key = f"{ck}|{tier}"
                     pix = QPixmapCache.find(key)
                     if pix is None or pix.isNull():
                         if self.image_root is not None:
