@@ -36,7 +36,10 @@ ASPECT_PRESETS = ["全部", "1:1", "4:3", "3:2", "16:9", "2:1",
 
 
 def parse_aspect(text: str):
-    """解析 'a:b' 或单个浮点（宽/高）；无效/全部 返回 None。"""
+    """解析 'a:b' 或单个浮点（宽/高）；无效/全部 返回 None。
+
+    拒绝 0、负数、inf、nan：这些值会让 abs(log(ratio/target)) 变成
+    inf/nan，导致筛选结果要么全灭要么全过。"""
     text = (text or "").strip()
     if not text or text in ("全部", "all", "*"):
         return None
@@ -44,10 +47,13 @@ def parse_aspect(text: str):
         if ":" in text:
             a, b = text.split(":", 1)
             a, b = float(a), float(b)
-            return a / b if a > 0 and b > 0 else None
-        v = float(text)
-        return v if v > 0 else None
-    except ValueError:
+            v = a / b if a > 0 and b > 0 else None
+        else:
+            v = float(text)
+        if v is None or not math.isfinite(v) or v <= 0:
+            return None
+        return v
+    except (ValueError, ZeroDivisionError):
         return None
 
 
@@ -83,6 +89,7 @@ class LibraryController(QObject):
         self._pending_thumbs = 0
         self._scan_finished = False
         self._dup_done = False
+        self._scan_refresh_timer: QTimer | None = None
         self._show_dup_dialog = False
 
         self.pool = QThreadPool.globalInstance()
@@ -162,12 +169,26 @@ class LibraryController(QObject):
             it.favorite = self.favorites.contains(it.path)
             self.all_items.append(it)
             self._by_path[str(it.path)] = it
-        self.refresh_view()
+        # 扫描期节流：每批都全量重排 + 重建模型会让大库（千张级）明显卡顿，
+        # 这里最多每 150ms 刷新一次；扫描结束时 _on_scan_done 再强制刷一次。
+        if self._scan_refresh_timer is None:
+            self._scan_refresh_timer = QTimer(self)
+            self._scan_refresh_timer.setSingleShot(True)
+            self._scan_refresh_timer.setInterval(150)
+            self._scan_refresh_timer.timeout.connect(self._flush_scan_refresh)
+        if not self._scan_refresh_timer.isActive():
+            self._scan_refresh_timer.start()
         self.status.emit(f"已加载 {len(self.all_items)} 张…", 0)
+
+    def _flush_scan_refresh(self) -> None:
+        if not self._scan_finished:
+            self.refresh_view()
 
     def _on_scan_done(self, total, errors, seq: int) -> None:
         if seq != self._load_seq:
             return
+        if self._scan_refresh_timer is not None:
+            self._scan_refresh_timer.stop()
         self._scan_finished = True
         total_size = sum(i.size_bytes for i in self.all_items)
         prefix = "垃圾桶 — " if self.trash_mode else ""
@@ -292,7 +313,8 @@ class LibraryController(QObject):
         self._apply_to_model()
 
     def set_page(self, page: int) -> None:
-        self.page = max(0, page)
+        # 上界在 _apply_to_model 里按 per_page 夹取；此处先规范为合法非负值
+        self.page = max(0, int(page))
         self._apply_to_model()
         self.view.verticalScrollBar().setValue(0)
 
@@ -367,6 +389,7 @@ class LibraryController(QObject):
             self._repaint_row(path_str)
         self.wall_update.emit()
         self._pending_thumbs -= 1
+        self._queued.discard((path_str, size))   # 任务已结束，允许再次排队
         self._warm_done(path_str, size)
         if self._scan_finished and self._pending_thumbs <= 0 and not self._dup_done:
             self._dup_done = True
@@ -374,6 +397,7 @@ class LibraryController(QObject):
 
     def _on_thumb_failed(self, path_str, size) -> None:
         self._pending_thumbs -= 1
+        self._queued.discard((path_str, size))   # 失败也要释放，否则该项永久无法重试
         self._warm_done(path_str, size)
         item = self._by_path.get(path_str)
         if item is not None:

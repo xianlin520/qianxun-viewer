@@ -239,7 +239,7 @@ class UploadWorker(QRunnable):
         from concurrent.futures import ThreadPoolExecutor
         from ..core.oss_service import OssIndex
         lock = threading.Lock()
-        counter = {"done": 0, "up": 0, "fail": 0}
+        counter = {"done": 0, "up": 0, "fail": 0, "dirty": 0}
         total = len(self.tasks)
 
         def one(task):
@@ -253,7 +253,7 @@ class UploadWorker(QRunnable):
                 st = local.stat()
                 with lock:
                     self.index.put(ck, key, st.st_size, st.st_mtime)
-                    self.index.save()
+                    counter["dirty"] += 1
                 ok = True
             except Exception:
                 ok = False
@@ -262,10 +262,18 @@ class UploadWorker(QRunnable):
                 counter["up"] += 1 if ok else 0
                 counter["fail"] += 0 if ok else 1
                 d = counter["done"]
+                # 批量落盘：每 20 张或最后一次才写文件，
+                # 避免千张库每传一张就重写整个索引 JSON
+                flush = counter["dirty"] >= 20 or d == total
+                if flush:
+                    counter["dirty"] = 0
+            if flush:
+                self.index.save()
             self.signals.progress.emit(d, total, local.name)
 
         with ThreadPoolExecutor(self.threads) as ex:
             list(ex.map(one, self.tasks))
+        self.index.save()   # 收尾兜底：中断/取消时也要保住已成功的索引
         self.signals.finished.emit(counter["up"], counter["fail"])
 
 

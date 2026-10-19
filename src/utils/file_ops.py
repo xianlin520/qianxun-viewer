@@ -13,6 +13,26 @@ REMOVE_DIR = "Remove"
 REMOVED_MAP = ".qx_removed.json"   # Remove 内记录：移出后文件名 -> 原相对路径
 
 
+def safe_join(root: Path, rel: str) -> Path | None:
+    """把相对路径安全地拼到 root 下；路径穿越/绝对路径/无法解析时返回 None。
+
+    Remove/.qx_removed.json 是可被外部编辑的文本，若其中写入
+    "../../x.png" 或绝对路径，直接 join 会把文件还原到图片库之外。
+    这里做归一化后校验公共前缀，越界一律拒绝（由调用方回退到根目录）。"""
+    root_r = root.resolve()
+    if not rel:
+        return None
+    try:
+        base = Path(rel)
+        if base.is_absolute():
+            return None
+        cand = (root_r / base).resolve()
+        cand.relative_to(root_r)
+    except (OSError, ValueError):
+        return None
+    return cand
+
+
 def unique_path(dest_dir: Path, name: str) -> Path:
     """重名自动加 (1)/(2)… 后缀。"""
     target = dest_dir / name
@@ -43,7 +63,7 @@ def move_to_remove(src: Path, image_root: Path) -> Path:
     try:
         rel = src.resolve().relative_to(image_root.resolve()).as_posix()
     except ValueError:
-        rel = src.as_posix()
+        rel = src.name       # 不在库内：只记文件名，还原时落回根目录
     mapping = _load_removed_map(remove_dir)
     mapping[target.name] = rel
     _save_removed_map(remove_dir, mapping)
@@ -51,16 +71,27 @@ def move_to_remove(src: Path, image_root: Path) -> Path:
 
 
 def restore_from_remove(src: Path, image_root: Path) -> Path:
-    """从 Remove/ 还原到原相对目录（目录不存在则重建，重名加后缀）。"""
+    """从 Remove/ 还原到原相对目录（目录不存在则重建，重名加后缀）。
+
+    相对路径经 safe_join 归一化校验：即使 .qx_removed.json 被改成
+    含 ../ 或绝对路径，也只会落回图片根目录，不会写出库外。"""
     remove_dir = image_root / REMOVE_DIR
     mapping = _load_removed_map(remove_dir)
     rel = mapping.get(src.name)
-    dest_dir = (image_root / rel).parent if rel else image_root
+    target_file = safe_join(image_root, rel) if rel else None
+    if target_file is not None:
+        dest_dir = target_file.parent
+        name = target_file.name or src.name
+    else:
+        # 无记录或记录越界：回落到图片根目录，绝不写到库外
+        dest_dir = image_root
+        name = src.name
     try:
         dest_dir.mkdir(parents=True, exist_ok=True)
     except OSError:
         dest_dir = image_root
-    target = unique_path(dest_dir, src.name)
+        name = src.name
+    target = unique_path(dest_dir, Path(name).name)
     shutil.move(str(src), str(target))
     mapping.pop(src.name, None)
     _save_removed_map(remove_dir, mapping)

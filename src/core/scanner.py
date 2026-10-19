@@ -51,7 +51,11 @@ def _scan_one(path: Path) -> tuple[ImageItem | None, bool]:
 
 def scan_batches(root: Path, batch_size: int = 64,
                  parallel: int = _PARALLEL) -> Iterator[tuple[list[ImageItem], int]]:
-    """生成器：逐批产出 (items, 本批累计错误数)。"""
+    """生成器：逐批产出 (items, 本批错误数)。
+
+    注意 errors 是**本批**计数、每批产出后归零：ScanWorker 侧负责
+    跨批累加（errors += errs）。若这里改成累计值，worker 再累加就会重复计数。
+    （stat 失败才算错误；能 stat 但解不出分辨率的走 item.corrupted 标记。）"""
     batch: list[ImageItem] = []
     errors = 0
     with ThreadPoolExecutor(parallel) as ex:

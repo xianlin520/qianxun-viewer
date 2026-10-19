@@ -24,6 +24,7 @@ class ImageModel(QAbstractListModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._items: list = []
+        self._row_of: dict[str, int] = {}   # 路径 -> 行号，避免每次缩略图就绪都线性扫
         self.info_mode = "random"   # random / time / size
 
     def rowCount(self, parent=QModelIndex()) -> int:
@@ -45,13 +46,11 @@ class ImageModel(QAbstractListModel):
     def set_items(self, items) -> None:
         self.beginResetModel()
         self._items = list(items)
+        self._row_of = {str(it.path): i for i, it in enumerate(self._items)}
         self.endResetModel()
 
     def row_of_path(self, path_str: str) -> int:
-        for i, it in enumerate(self._items):
-            if str(it.path) == path_str:
-                return i
-        return -1
+        return self._row_of.get(path_str, -1)
 
     def info_text(self, item) -> str:
         if self.info_mode == "size":

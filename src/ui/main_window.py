@@ -165,10 +165,8 @@ class MainWindow(QWidget):
         self.btn_mode.toggled.connect(lambda _on: self._sync_mode_ui())
         self.act_settings.triggered.connect(self._open_settings)
         self.act_about.triggered.connect(self._show_about)
-        self.act_cache.triggered.connect(
-            lambda: CacheDialog(self.controller, self).show())
-        self.act_upload.triggered.connect(
-            lambda: UploadDialog(self.controller, self).show())
+        self.act_cache.triggered.connect(self._show_cache)
+        self.act_upload.triggered.connect(self._show_upload)
         self.btn_online.toggled.connect(self._on_online_toggled)
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
@@ -202,27 +200,32 @@ class MainWindow(QWidget):
         self.controller.view_reset.connect(self._on_view_reset)
         self.controller.scan_done.connect(self._restore_scroll)
 
+        # 全局快捷键在大图浏览器打开时一律让位（_guard 检查 viewer 可见性）。
+        # QShortcut 属窗口级快捷键，其匹配先于 viewer.keyPressEvent 派发，
+        # 因此必须在这里屏蔽：否则大图内按 R 会同时触发"还原选中项"，
+        # 按 F / Del / Ctrl+C 也会误作用到列表选择。
+        _g = self._guard
         QShortcut(QKeySequence("F11"), self, self._toggle_fullscreen)
         QShortcut(QKeySequence("F5"), self, self.controller.reload_current)
-        QShortcut(QKeySequence("R"), self,
-                  self._guard(lambda: self.controller.trash_mode and [
-                      self.controller.restore_item(i) for i in self._selected_items()]))
-        # 大图浏览器打开时由 viewer 自行处理按键，避免双重触发
-        QShortcut(QKeySequence("F"), self,
-                  self._guard(lambda: [self.controller.toggle_favorite(i)
-                                       for i in self._selected_items()]))
-        QShortcut(QKeySequence("Del"), self,
-                  self._guard(lambda: [self.controller.remove_item(i)
-                                       for i in self._selected_items()]))
-        QShortcut(QKeySequence("Ctrl+S"), self,
-                  self._guard(lambda: self._selected_items() and self._save(
-                      self._selected_items()[0])))
-        QShortcut(QKeySequence("Ctrl+C"), self,
-                  self._guard(lambda: self._selected_items() and self.controller.copy_item(
-                      self._selected_items()[0])))
-        QShortcut(QKeySequence("Ctrl+O"), self,
-                  self._guard(lambda: self._selected_items() and self.controller.reveal_item(
-                      self._selected_items()[0])))
+        QShortcut(QKeySequence("R"), self, _g(
+            lambda: self.controller.trash_mode and [
+                self.controller.restore_item(i) for i in self._selected_items()]))
+        QShortcut(QKeySequence("F"), self, _g(
+            lambda: [self.controller.toggle_favorite(i)
+                     for i in self._selected_items()]))
+        QShortcut(QKeySequence("Del"), self, _g(
+            lambda: self._confirm_remove(self._selected_items()) and [
+                self.controller.remove_item(i)
+                for i in self._selected_items()]))
+        QShortcut(QKeySequence("Ctrl+S"), self, _g(
+            lambda: self._selected_items() and self._save(
+                self._selected_items()[0])))
+        QShortcut(QKeySequence("Ctrl+C"), self, _g(
+            lambda: self._selected_items() and self.controller.copy_item(
+                self._selected_items()[0])))
+        QShortcut(QKeySequence("Ctrl+O"), self, _g(
+            lambda: self._selected_items() and self.controller.reveal_item(
+                self._selected_items()[0])))
 
     def _guard(self, fn):
         def wrapper():
@@ -398,11 +401,13 @@ class MainWindow(QWidget):
             self.controller.load_directory(Path(start))
 
     def _restore_scroll(self) -> None:
+        """仅在滚动模式恢复纵向位置；分页模式按页码恢复，两者别混用。"""
         root = self.controller.root
         if (root and str(root) == self.settings.last_dir
                 and self.controller._scroll_restored_for != str(root)):
             self.controller._scroll_restored_for = str(root)
-            self.view.verticalScrollBar().setValue(self.settings.last_scroll)
+            if self.controller.view_mode != "page":
+                self.wall.verticalScrollBar().setValue(self.settings.last_scroll)
 
     def closeEvent(self, e) -> None:
         s = self.settings
@@ -412,7 +417,7 @@ class MainWindow(QWidget):
         s.sort_mode = self.controller.sort_mode
         s.thumb_size = self.delegate.thumb_size
         s.last_page = self.controller.page
-        s.last_scroll = self.view.verticalScrollBar().value()
+        s.last_scroll = self.wall.verticalScrollBar().value()   # 滚动模式的位置
         s.window_geo = self.saveGeometry()
         s.sync()
         # 通知工作线程取消并等待线程池收尾，
@@ -502,6 +507,19 @@ class MainWindow(QWidget):
             acts["remove"] = menu.addAction("移出图片 (Del)")
         return menu, acts
 
+    def _confirm_remove(self, items) -> bool:
+        """批量移出前确认：多选时 Del 一按就动一批文件，风险太高。"""
+        if len(items) <= 1:
+            return True
+        if self.controller.trash_mode:
+            return True
+        ans = QMessageBox.question(
+            self, "确认移出",
+            f"将把选中的 {len(items)} 张图片移入 Remove/（可随时还原）。继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        return ans == QMessageBox.StandardButton.Yes
+
     def _run_menu_action(self, act, acts, items) -> None:
         if act is None:
             return
@@ -514,7 +532,8 @@ class MainWindow(QWidget):
             "copy": lambda: self.controller.copy_item(items[0]),
             "copyfile": lambda: file_ops.copy_file(items[0].path),
             "reveal": lambda: self.controller.reveal_item(items[0]),
-            "remove": lambda: [self.controller.remove_item(i) for i in items],
+            "remove": lambda: self._confirm_remove(items) and [
+                self.controller.remove_item(i) for i in items],
             "restore": lambda: [self.controller.restore_item(i) for i in items],
         }
         for key, action in acts.items():
@@ -589,7 +608,17 @@ class MainWindow(QWidget):
                     self._status.showMessage(f"保存失败：{exc}", 5000)
 
     def _show_dups(self, groups) -> None:
-        DuplicatesDialog(self.controller, groups, self).show()
+        # 保持引用：非模态对话框若只由局部变量持有，会被 GC 立即回收而闪退
+        self._dlg_dups = DuplicatesDialog(self.controller, groups, self)
+        self._dlg_dups.show()
+
+    def _show_cache(self) -> None:
+        self._dlg_cache = CacheDialog(self.controller, self)
+        self._dlg_cache.show()
+
+    def _show_upload(self) -> None:
+        self._dlg_upload = UploadDialog(self.controller, self)
+        self._dlg_upload.show()
 
     def _toggle_fullscreen(self) -> None:
         if self.isFullScreen():

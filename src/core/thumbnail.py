@@ -61,11 +61,15 @@ def phash_of_file(path: Path) -> str:
 
 
 def generate(image_root: Path, item, size: int, with_phash: bool = False):
-    """生成 size 档缩略图，返回 (缓存路径 | None, phash | '')。失败不抛异常。"""
+    """生成 size 档缩略图，返回 (缓存路径 | None, phash | '')。失败不抛异常。
+
+    并发安全：先写同目录临时文件再 os.replace 原子替换——
+    同一张图被多个 worker 同时请求时，不会出现读到半个 JPEG 的损坏缓存。"""
     out = thumb_path(image_root, item, size)
     if out.exists():
         return out, (phash_of_file(out) if with_phash else "")
     for i in range(3):  # 慢速/网络介质退避重试，避免瞬时 IO 错误误判损坏
+        tmp: Path | None = None
         try:
             with Image.open(item.path) as im:
                 im = ImageOps.exif_transpose(im) or im
@@ -73,9 +77,16 @@ def generate(image_root: Path, item, size: int, with_phash: bool = False):
                 ph = _phash_of(im) if with_phash else ""
                 im.thumbnail((size, size), Image.Resampling.LANCZOS)
                 out.parent.mkdir(parents=True, exist_ok=True)
-                im.save(out, "JPEG", quality=85)
+                tmp = out.with_suffix(f".{os.getpid()}.{id(im) & 0xffff}.tmp")
+                im.save(tmp, "JPEG", quality=85)
+            os.replace(tmp, out)
             return out, ph
         except Exception:
+            if tmp is not None:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
             if i < 2:
                 time.sleep(0.3 * (i + 1))
     return None, ""

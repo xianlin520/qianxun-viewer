@@ -255,19 +255,27 @@ class WallView(QAbstractScrollArea):
                 p.setPen(QColor("#e57373"))
                 p.drawText(cell, Qt.AlignmentFlag.AlignCenter, "已损坏")
             else:
-                key = f"{item.path}|{tier}"
-                pix = QPixmapCache.find(key)
-                if pix is None or pix.isNull():
-                    if self.image_root is not None:
-                        fp = thumbnail.thumb_path(self.image_root, item, tier)
-                        if fp.exists():
-                            pix = QPixmap(str(fp))
-                            if not pix.isNull():
-                                QPixmapCache.insert(key, pix)
-                if pix is not None and not pix.isNull():
-                    scaled = pix.scaled(cell.size(),
-                                        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                                        Qt.TransformationMode.SmoothTransformation)
+                # 已按目标像素裁好缓存：命中则直接贴图，
+                # 避免每帧对每个可见格重复做一次 SmoothTransformation
+                skey = f"{item.path}|{tier}|{cell.width()}x{cell.height()}|c"
+                scaled = QPixmapCache.find(skey)
+                if scaled is None or scaled.isNull():
+                    key = f"{item.path}|{tier}"
+                    pix = QPixmapCache.find(key)
+                    if pix is None or pix.isNull():
+                        if self.image_root is not None:
+                            fp = thumbnail.thumb_path(self.image_root, item, tier)
+                            if fp.exists():
+                                pix = QPixmap(str(fp))
+                                if not pix.isNull():
+                                    QPixmapCache.insert(key, pix)
+                    if pix is not None and not pix.isNull():
+                        scaled = pix.scaled(
+                            cell.size(),
+                            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                            Qt.TransformationMode.SmoothTransformation)
+                        QPixmapCache.insert(skey, scaled)
+                if scaled is not None and not scaled.isNull():
                     sx = (scaled.width() - cell.width()) // 2
                     sy = (scaled.height() - cell.height()) // 2
                     p.drawPixmap(cell, scaled, QRect(sx, sy, cell.width(), cell.height()))
