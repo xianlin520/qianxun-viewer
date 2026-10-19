@@ -141,22 +141,20 @@ class DuplicatesDialog(QDialog):
         self.accept()
 
     def _preview(self, item) -> QPixmap:
-        """优先复用任意档位本地缓存；本地项无缓存时生成 256 档兜底。
-        在线项只读缓存（无本地文件，不尝试读伪路径）。"""
+        """优先复用任意档位本地缓存；**不再同步生成**。
+
+        原实现缓存缺失时会同步调用 thumbnail.generate()，一个 40 张的组
+        实测要 649ms 全部卡在 UI 线程（每张都要解码原图）。
+        现在只读已有缓存，缺失则显示占位，由查重流程/浏览过程填充。"""
         root = self.controller.cache_root or self.controller.root
         if root is None:
             return QPixmap()
-        for tier in (256, 512):
+        for tier in (512, 256):
             fp = thumbnail.thumb_path(root, item, tier)
             if fp.exists():
                 pix = QPixmap(str(fp))
                 if not pix.isNull():
                     return pix
-        if item.remote_key:
-            return QPixmap()
-        out, _ph = thumbnail.generate(root, item, 256)
-        if out is not None:
-            return QPixmap(str(out))
         return QPixmap()
 
     def _batch(self, by: str) -> None:

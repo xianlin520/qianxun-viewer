@@ -84,12 +84,21 @@ class ViewerOverlay(QWidget):
         self.update()
 
     def _fit_scale(self) -> float:
+        """适应窗口的缩放比；控件尚未布局（宽/高为 0）时返回 1.0。
+
+        返回 0 会让 _scale=0，随后 wheelEvent 里的
+        (mouse - center - offset) / _scale 直接除零；即使被 isNull 侥幸挡住，
+        画面也会停在不可缩放的 0 倍状态。"""
         if self._pix.isNull():
             return 1.0
         r = self.rect()
+        if r.width() <= 0 or r.height() <= 0:
+            return 1.0
         pw, ph = self._pix.width(), self._pix.height()
         if self._rotate % 180 == 90:
             pw, ph = ph, pw
+        if pw <= 0 or ph <= 0:
+            return 1.0
         return min(r.width() / pw, r.height() / ph) * 0.95
 
     def rotate90(self) -> None:
@@ -134,8 +143,8 @@ class ViewerOverlay(QWidget):
 
     # ---------------- 交互 ----------------
     def wheelEvent(self, e) -> None:
-        if self._pix.isNull():
-            return
+        if self._pix.isNull() or not self._scale:
+            self._scale = self._fit_scale() or 1.0
         factor = 1.15 if e.angleDelta().y() > 0 else 1 / 1.15
         new_scale = max(self.MIN_SCALE, min(self.MAX_SCALE, self._scale * factor))
         if new_scale == self._scale:
