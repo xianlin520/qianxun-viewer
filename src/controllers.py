@@ -803,18 +803,25 @@ class LibraryController(QObject):
         skip_dups = self.settings.upload_skip_dups
         tasks = []
         skipped = 0
+        outside = 0                     # 不在库内的文件：不能猜 key（会同名覆盖）
         seen: dict[tuple, bool] = {}
+        used_keys: dict[str, Path] = {}  # key -> 首个占用者，检测批内撞键
         for it in self.all_items:
             if it.remote_key or it.corrupted:
                 continue
             ck = thumbnail.cache_key(it)
-            rel = None
             try:
                 rel = it.path.resolve().relative_to(
                     self.main_root.resolve()).as_posix()
             except ValueError:
-                rel = it.path.name
-            if self.oss_index.get(ck) or OssIndex.make_key(rel) in existing:
+                outside += 1
+                continue                # 跳过而不是退化成文件名
+            key = OssIndex.make_key(rel)
+            if key in used_keys:
+                skipped += 1            # 批内撞键：保留先到的，避免互相覆盖
+                continue
+            used_keys[key] = it.path
+            if self.oss_index.get(ck) or key in existing:
                 if skip_dups and it.phash:
                     seen[(it.size_bytes, it.phash)] = True
                 skipped += 1
@@ -826,6 +833,9 @@ class LibraryController(QObject):
                     continue
                 seen[ident] = True
             tasks.append((it.path, rel, ck))
+        if outside:
+            self.status.emit(
+                f"有 {outside} 个文件不在当前图库目录内，已跳过上传（避免云端路径冲突）", 6000)
         w = UploadWorker(oss, self.oss_index, tasks,
                          is_cancelled=self.is_cancelled,
                          threads=self.settings.upload_threads)

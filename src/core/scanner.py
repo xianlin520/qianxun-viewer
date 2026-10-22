@@ -49,6 +49,24 @@ def _scan_one(path: Path) -> tuple[ImageItem | None, bool]:
                       width=w, height=h, corrupted=(w == 0)), False)
 
 
+def _is_link_dir(path: str) -> bool:
+    """是否为符号链接或 Windows 目录联接（junction）。
+
+    注意：`os.walk(followlinks=False)` 在 Windows 上**挡不住 junction** ——
+    它靠 scandir 的 is_dir() 判断，而 junction 的 `is_symlink()` 返回 False。
+    必须显式用 `os.path.isjunction()`。否则「照片搬到别的盘、原位置留 junction」
+    这种常见做法一旦成环，扫描会无限递归（实测 60 层还在继续往下走）。"""
+    try:
+        if os.path.islink(path):
+            return True
+        isjunction = getattr(os.path, "isjunction", None)
+        if isjunction is not None and isjunction(path):
+            return True
+    except OSError:
+        return True        # 判断不了就不进，宁可少扫也不能无限递归
+    return False
+
+
 def scan_batches(root: Path, batch_size: int = 64,
                  parallel: int = _PARALLEL) -> Iterator[tuple[list[ImageItem], int]]:
     """生成器：逐批产出 (items, 本批错误数)。
@@ -56,13 +74,17 @@ def scan_batches(root: Path, batch_size: int = 64,
     注意 errors 是**本批**计数、每批产出后归零：ScanWorker 侧负责
     跨批累加（errors += errs）。若这里改成累计值，worker 再累加就会重复计数。
     （stat 失败才算错误；能 stat 但解不出分辨率的走 item.corrupted 标记。）"""
+    if not root.exists():
+        # 目录不存在时明确报错，别静默产出「扫描完成：0 张图片」
+        raise FileNotFoundError(str(root))
     batch: list[ImageItem] = []
     errors = 0
     with ThreadPoolExecutor(parallel) as ex:
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = sorted(
                 d for d in dirnames
-                if d.lower() not in _SKIP_DIRS and not d.startswith("."))
+                if d.lower() not in _SKIP_DIRS and not d.startswith(".")
+                and not _is_link_dir(os.path.join(dirpath, d)))
             cands = [Path(dirpath) / n for n in sorted(filenames)
                      if Path(n).suffix.lower() in IMAGE_EXTS]
             if not cands:
