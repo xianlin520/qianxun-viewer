@@ -46,8 +46,14 @@ export default {
     const method = request.method.toUpperCase();
 
     // ---- 公开路由 ----
+    // 支持两种写法：
+    //   /s/<token>          看图页（默认）
+    //   /s/<token>.<ext>    代理图片，后缀用于让链接看起来像图片（如 .jpg）
+    // 后缀本身不参与鉴权，只影响响应与下载文件名。
     if (method === "GET" && path.startsWith("/s/")) {
-      const token = path.slice(3).split("/")[0];
+      const seg = path.slice(3).split("/")[0];
+      const dot = seg.lastIndexOf(".");
+      const token = dot > 0 ? seg.slice(0, dot) : seg;
       return handleShortLink(request, env, token);
     }
 
