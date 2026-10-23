@@ -22,6 +22,7 @@ from .cache_dialog import CacheDialog
 from .duplicates_dialog import DuplicatesDialog
 from .grid_view import GridView, ImageModel, ThumbDelegate
 from .oss_dialogs import OssConfigDialog, UploadDialog
+from .shares_dialog import SharesDialog
 from .pager import PagerBar
 from .settings_dialog import SettingsDialog
 from .viewer import ViewerOverlay
@@ -75,6 +76,9 @@ class MainWindow(QWidget):
         self._ratio_hinted = False
         self._wire()
         self._restore_state()
+        # 启动后延迟静默检测新版本：不阻塞启动，有新版本才提示
+        if self.settings.check_updates:
+            QTimer.singleShot(3000, lambda: self._check_update(manual=False))
 
     # ---------------- 构建 ----------------
     def _build_toolbar(self, lay) -> None:
@@ -144,9 +148,11 @@ class MainWindow(QWidget):
         self.act_trash = self.menu_more.addAction("垃圾桶")
         self.act_trash.setCheckable(True)
         self.act_upload = self.menu_more.addAction("上传到云")
+        self.act_shares = self.menu_more.addAction("分享记录")
         self.menu_more.addSeparator()
         self.act_cache = self.menu_more.addAction("缓存管理")
         self.act_settings = self.menu_more.addAction("设置")
+        self.act_update = self.menu_more.addAction("检查更新")
         self.act_about = self.menu_more.addAction("关于")
         self.btn_more.setMenu(self.menu_more)
 
@@ -166,8 +172,10 @@ class MainWindow(QWidget):
         self.btn_mode.toggled.connect(lambda _on: self._sync_mode_ui())
         self.act_settings.triggered.connect(self._open_settings)
         self.act_about.triggered.connect(self._show_about)
+        self.act_update.triggered.connect(lambda: self._check_update(manual=True))
         self.act_cache.triggered.connect(self._show_cache)
         self.act_upload.triggered.connect(self._show_upload)
+        self.act_shares.triggered.connect(self._show_shares)
         self.btn_online.toggled.connect(self._on_online_toggled)
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
@@ -404,6 +412,44 @@ class MainWindow(QWidget):
             self, f"关于 {meta.APP_NAME}",
             f"<b>{meta.APP_NAME}</b> {meta.APP_EN} v{meta.VERSION}<br><br>"
             f"缩略图优先 · 全程异步 · 无损操作<br><br>{meta.COPYRIGHT}")
+
+    def _check_update(self, manual: bool = False) -> None:
+        """检测新版本。
+
+        manual=False 为启动后的静默检测：失败不打扰，已被忽略的版本也不提示。
+        manual=True 为用户主动点「检查更新」：无论结果都给反馈。"""
+        from ..core import updater
+
+        if not manual:
+            # 静默模式下不重复询问同一已被跳过的版本
+            pass
+
+        info, err = updater.check_latest()
+
+        if info is None:
+            if manual:
+                QMessageBox.information(
+                    self, "检查更新",
+                    f"暂时无法获取版本信息。\n\n{err}")
+            return
+
+        if not info.is_newer_than(meta.VERSION):
+            if manual:
+                QMessageBox.information(
+                    self, "检查更新",
+                    f"当前已是最新版本 v{meta.VERSION}。")
+            return
+
+        # 用户已对该版本点过「稍后再说」：静默模式不再提示
+        if not manual and self.settings.skipped_version == info.version:
+            return
+
+        from .update_dialog import UpdateDialog
+        dlg = UpdateDialog(info, self)
+        dlg.exec()
+        if dlg.skipped:
+            self.settings.skipped_version = info.version
+            self.settings.sync()
 
     # ---------------- 拖拽加载 ----------------
     def dragEnterEvent(self, e) -> None:
@@ -754,6 +800,11 @@ class MainWindow(QWidget):
     def _show_upload(self) -> None:
         self._dlg_upload = UploadDialog(self.controller, self)
         self._dlg_upload.show()
+
+    def _show_shares(self) -> None:
+        # 非模态，保持引用避免 GC
+        self._dlg_shares = SharesDialog(self.controller, self)
+        self._dlg_shares.show()
 
     def _toggle_fullscreen(self) -> None:
         if self.isFullScreen():

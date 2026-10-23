@@ -218,3 +218,22 @@ class AppSettings:
     @server_enabled.setter
     def server_enabled(self, v: bool) -> None:
         self._s.setValue("server_enabled", "1" if v else "0")
+
+    # ---- 更新检测 ----
+    @property
+    def skipped_version(self) -> str:
+        """用户点「稍后再说」时记住的版本，同版本不再提示。"""
+        return self._get("skipped_version", "")
+
+    @skipped_version.setter
+    def skipped_version(self, v: str) -> None:
+        self._s.setValue("skipped_version", (v or "").strip())
+
+    @property
+    def check_updates(self) -> bool:
+        """是否在启动后静默检测新版本。"""
+        return str(self._get("check_updates", "1")) not in ("0", "false")
+
+    @check_updates.setter
+    def check_updates(self, v: bool) -> None:
+        self._s.setValue("check_updates", "1" if v else "0")

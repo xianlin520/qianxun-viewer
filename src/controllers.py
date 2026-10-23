@@ -228,6 +228,10 @@ class LibraryController(QObject):
         self.refresh_view()
         self.scan_done.emit()
         self._warm_all_thumbs()
+        # 扫描完成后从云端合并收藏：延迟到事件循环空闲再做，
+        # 避免同步网络请求卡住「扫描完成」这一刻的 UI
+        if not self.trash_mode and not self.online_mode:
+            QTimer.singleShot(1200, self.sync_favorites_from_server)
 
     # ---------------- 视图组织 ----------------
     def refresh_view(self) -> None:
@@ -503,6 +507,65 @@ class LibraryController(QObject):
         if self.fav_only and not item.favorite:
             self.refresh_view()
         self.status.emit("已加入最爱 ★" if item.favorite else "已取消最爱", 2000)
+        self._push_favorite(item)
+
+    def _favorite_key(self, item) -> str:
+        """收藏的跨机标识：用相对图库根目录的路径（与云端 oss_key 同规则）。"""
+        try:
+            return item.path.resolve().relative_to(
+                self.main_root.resolve()).as_posix()
+        except (ValueError, AttributeError):
+            return item.path.name
+
+    def _push_favorite(self, item) -> None:
+        """把单条收藏变更推给服务端。
+
+        失败静默：本地 favorites.json 才是权威，云端只做跨机同步；
+        下一次启动拉取时会以 LWW 合并，不需要在这里阻塞或报错。"""
+        srv = self.share_server()
+        if srv is None or self.trash_mode:
+            return
+        try:
+            srv.push_favorites([{
+                "key": self._favorite_key(item),
+                "favorite": bool(item.favorite),
+                "updated_at": int(time.time() * 1000),
+            }])
+        except Exception:
+            pass
+
+    def sync_favorites_from_server(self) -> int:
+        """启动时从服务端拉取收藏并与本地合并（LWW：时间戳大者胜）。
+
+        返回新增到本地的收藏数量。云端有、本地无的收藏会被补进 favorites.json。"""
+        srv = self.share_server()
+        if srv is None or self.favorites is None:
+            return 0
+        ok, items = srv.pull_favorites()
+        if not ok or not items:
+            return 0
+        added = 0
+        base = self.main_root
+        if base is None:
+            return 0
+        for it in items:
+            if not it.get("favorite"):
+                continue
+            rel = str(it.get("key") or "")
+            if not rel or rel in self.favorites.items:
+                continue
+            # 云端有、本地无 → 补进本地（仅在文件确实存在时，避免污染清单）
+            if (base / rel).exists():
+                self.favorites.items[rel] = ""     # added 留空，下次 toggle 会补时间
+                item = self._by_path.get(str((base / rel).resolve()))
+                if item is not None:
+                    item.favorite = True
+                added += 1
+        if added:
+            self.favorites.save()
+            self.refresh_view()
+            self.status.emit(f"已从云端恢复 {added} 个收藏", 4000)
+        return added
 
     # ---------------- 图片操作 ----------------
     def remove_item(self, item) -> None:

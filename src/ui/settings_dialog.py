@@ -75,6 +75,11 @@ class SettingsDialog(QDialog):
         row_srv.addStretch(1)
         form.addRow(row_srv)
 
+        # ---- 更新检测 ----
+        self.chk_update = QCheckBox("启动后自动检测新版本（仅查询 Gitee Releases）")
+        self.chk_update.setChecked(settings.check_updates)
+        form.addRow(self.chk_update)
+
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
                                    | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
@@ -131,4 +136,5 @@ class SettingsDialog(QDialog):
         self.settings.server_enabled = self.chk_server.isChecked()
         self.settings.server_base = self.edit_srv.text().strip()
         self.settings.server_secret = self.edit_srv_secret.text().strip()
+        self.settings.check_updates = self.chk_update.isChecked()
         super().accept()
