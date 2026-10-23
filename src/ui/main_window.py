@@ -573,7 +573,12 @@ class MainWindow(QWidget):
     def _build_menu(self, items) -> tuple:
         menu = QMenu(self)
         acts = {}
-        acts["share"] = menu.addAction("复制外链（限时签名）")
+        # 短链优先（服务端启用时），否则回退为直连签名外链
+        if self.controller.share_server() is not None:
+            acts["share"] = menu.addAction("复制分享短链（可撤销）")
+            acts["share_revoke"] = menu.addAction("撤销该图的分享短链")
+        else:
+            acts["share"] = menu.addAction("复制外链（限时签名）")
         acts["share_perm"] = menu.addAction("复制永久链接（对象公共读）")
         acts["revoke_perm"] = menu.addAction("撤回永久公开")
         if self.controller.online_mode:
@@ -610,6 +615,7 @@ class MainWindow(QWidget):
             return
         dispatch = {
             "share": lambda: self._copy_share_link(items[0]),
+            "share_revoke": lambda: self._revoke_short_links(items[0]),
             "share_perm": lambda: self._copy_share_link(items[0], True),
             "revoke_perm": lambda: self._revoke_share(items[0]),
             "fav": lambda: [self.controller.toggle_favorite(i) for i in items],
@@ -645,6 +651,10 @@ class MainWindow(QWidget):
             self.controller.restore_item(item)
 
     def _copy_share_link(self, item, permanent: bool = False) -> None:
+        """复制分享链接。
+
+        优先走服务端可撤销短链；未配置/失败时回退到直连签名外链。
+        permanent=True（永久直链）始终走 OSS 公共读，不经服务端。"""
         if (self.controller.oss_configured() and not item.remote_key
                 and not self.controller.resolve_cloud_key(item)):
             ans = QMessageBox.question(
@@ -656,12 +666,33 @@ class MainWindow(QWidget):
                 return
             if not self.controller.upload_one(item):
                 return
+
+        # 1) 服务端短链（可撤销）
+        if not permanent and self.controller.share_server() is not None:
+            short = self.controller.share_short_link(item)
+            if short:
+                from PySide6.QtWidgets import QApplication
+                QApplication.clipboard().setText(short)
+                self._status.showMessage(
+                    f"已复制短链（可随时撤销）：{short}", 6000)
+                return
+            err = self.controller.share_error or "未知原因"
+            ans = QMessageBox.question(
+                self, "短链生成失败",
+                f"分享服务端没有返回短链：\n{err}\n\n"
+                "是否改为复制直连签名外链（≤7 天，不可撤销）？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes)
+            if ans != QMessageBox.StandardButton.Yes:
+                return
+
+        # 2) 回退：直连签名 / 永久直链
         link = self.controller.share_link(item, permanent)
         if link:
             from PySide6.QtWidgets import QApplication
             QApplication.clipboard().setText(link)
             msg = ("已复制永久链接（对象已设公共读）" if permanent
-                   else "已复制签名外链（限时有效）")
+                   else "已复制签名外链（限时有效，不可撤销）")
             self._status.showMessage(msg, 3000)
             return
         if permanent and self.controller.share_blocked:
@@ -677,6 +708,25 @@ class MainWindow(QWidget):
                 QMessageBox.StandardButton.Yes)
             if ans == QMessageBox.StandardButton.Yes:
                 self._copy_share_link(item)
+
+    def _revoke_short_links(self, item) -> None:
+        """撤销该图片的所有短链（服务端）。"""
+        if self.controller.share_server() is None:
+            self._status.showMessage("未启用分享服务端", 3000)
+            return
+        ans = QMessageBox.question(
+            self, "撤销分享链接",
+            f"将撤销「{item.path.name}」的全部分享短链，之后打开会显示 410 已失效。\n\n"
+            "已发出的链接无法恢复，需要重新创建。继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        n = self.controller.revoke_short_links(item)
+        if n:
+            self._status.showMessage(f"已撤销 {n} 条短链", 4000)
+        else:
+            self._status.showMessage("没有可撤销的有效短链", 3000)
 
     def _revoke_share(self, item) -> None:
         if self.controller.revoke_share(item):

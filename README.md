@@ -5,7 +5,7 @@
 > 面向大规模本地图片库（千张级、单张 10~60MB）的高性能 Windows 桌面查看器。
 > 缩略图优先 · 全程异步 · 无损操作 · 云盘友好。
 
-`版本 v1.5.6` · `平台 Windows 10/11 x64` · `Python 3.11+ / PySide6`
+`版本 v1.6.0` · `平台 Windows 10/11 x64` · `Python 3.11+ / PySide6`
 
 **作者：羡林i (Y_XianLin)** · 版权所有 © 2026，保留所有权利（详见 [LICENSE](LICENSE)）
 仓库：[Gitee](https://gitee.com/qianxun-cloud/qianxun-viewer) · 前身：[ImgRandomDisplay](https://gitee.com/xianlin-i/ImgRandomDisplay)
@@ -154,11 +154,27 @@ qianxun-viewer/
 
 开发期通过离屏（`QT_QPA_PLATFORM=offscreen`）冒烟脚本验证：真实大目录与云盘目录扫描、缩略图缓存、排序、分页、图片墙无缝布局与末行不拉伸、卡片按钮、最爱持久化、移出/还原、重复检测与链式抑制、长宽比筛选、大图解码、退出无残留等。测试脚本为临时文件，不随仓库分发。
 
+## 分享服务端（可选）
+
+仓库内含一个配套的 Cloudflare Workers 服务端（[server/](server/README.md)），
+用于**可撤销分享短链**与**图片内联展示**。
+
+**为什么需要它**：阿里云 OSS 对新建 Bucket 的默认域名有强制下载策略
+（`Content-Disposition: attachment` + `x-oss-force-download: true`），
+`response-content-disposition=inline` 参数实测**无法覆盖**。只有换出口能解决，
+代理是免 ICP 备案的那条路。同时签名外链无法提前作废，短链补上了这个缺口。
+
+部署后右键「复制分享短链」得到 `https://img.agentstack.vip/s/<token>`，
+撤销后访问返回 410。仅用 D1 + 只读 OSS AK，Free 套餐足够自用。
+
+未配置服务端时，客户端行为与之前完全一致（直连签名外链）。
+
 ## 文档
 
 - [用户指南](docs/USER_GUIDE.md)
 - [架构设计](docs/ARCHITECTURE.md)
 - [OSS 开发手册](docs/OSS_DEV_MANUAL.md)（接口/上下行/分享链接/链接失效/权限/实测速率）
+- [分享服务端部署与运维](server/README.md)（Workers/D1/HMAC 鉴权/踩坑记录）
 - [变更日志](docs/CHANGELOG.md)
 
 ## 版权与许可

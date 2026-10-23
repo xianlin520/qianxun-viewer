@@ -191,3 +191,30 @@ class AppSettings:
     @auto_load_last.setter
     def auto_load_last(self, v: bool) -> None:
         self._s.setValue("auto_load_last", "1" if v else "0")
+
+    # ---- 分享服务端（Cloudflare Workers 短链）----
+    @property
+    def server_base(self) -> str:
+        return self._get("server_base", "").rstrip("/")
+
+    @server_base.setter
+    def server_base(self, v: str) -> None:
+        self._s.setValue("server_base", (v or "").strip().rstrip("/"))
+
+    @property
+    def server_secret(self) -> str:
+        """与服务端共享的 HMAC 密钥；与 OSS Secret 同一套 DPAPI 加密。"""
+        return secret.unprotect(self._get("server_secret"))
+
+    @server_secret.setter
+    def server_secret(self, v: str) -> None:
+        self._s.setValue("server_secret", secret.protect(v))
+
+    @property
+    def server_enabled(self) -> bool:
+        """是否启用服务端短链（关闭时回退到直连签名外链）。"""
+        return str(self._get("server_enabled", "0")) not in ("0", "false")
+
+    @server_enabled.setter
+    def server_enabled(self, v: bool) -> None:
+        self._s.setValue("server_enabled", "1" if v else "0")

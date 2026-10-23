@@ -1,6 +1,6 @@
 # 架构设计
 
-千寻影集 QianXun Album v1.5.6 · 版权所有 © 羡林i (Y_XianLin)
+千寻影集 QianXun Album v1.6.0 · 版权所有 © 羡林i (Y_XianLin)
 
 ## 1. 设计思想
 

@@ -16,3 +16,15 @@ dist/
 
 # 本地密钥（绝不入库）
 .secrets/
+
+# 服务端（Cloudflare Workers）
+node_modules/
+.wrangler/
+server/dist/
+server/.dev.vars
+*.log
+
+# 临时探测脚本（以 _ 开头，只存在于工作区）
+_*.py
+_*.mjs
+_*.b64

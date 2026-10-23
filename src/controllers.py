@@ -118,6 +118,7 @@ class LibraryController(QObject):
         self._index_bucket = ""  # 索引所属 Bucket（换桶后自动重建）
         self._cloud_keys = None   # 云端 key 缓存（懒加载，上传后增量维护）
         self.share_error = ""     # 最近一次分享失败原因（供 UI 提示）
+        self._share_srv = None    # 分享服务端客户端（惰性构造）
         self.share_blocked = False   # 是否因“阻止公共访问”失败（可降级签名外链）
 
         # 目录变更监听：防抖后自动重扫
@@ -889,6 +890,48 @@ class LibraryController(QObject):
                 self.build_oss() if self.oss_configured() else None)
         except Exception:
             return None
+
+    def share_server(self):
+        """惰性构造分享服务端客户端（未启用/未配置时返回 None）。"""
+        s = self.settings
+        if not s.server_enabled or not s.server_base or not s.server_secret:
+            return None
+        if self._share_srv is None:
+            from .core.share_server import ShareServer
+            self._share_srv = ShareServer(s.server_base, s.server_secret)
+        return self._share_srv
+
+    def share_short_link(self, item) -> str | None:
+        """通过服务端创建可撤销短链；失败返回 None 并把原因写进 share_error。
+
+        未启用服务端时返回 None，由 UI 回退到直接签名外链。"""
+        srv = self.share_server()
+        if srv is None:
+            return None
+        self.share_error = ""
+        key = self.resolve_cloud_key(item)
+        if not key:
+            self.share_error = "该图片尚未上传到云，无法生成短链"
+            return None
+        ok, res = srv.create_share(key, item.path.name)
+        if not ok:
+            self.share_error = str(res)
+            return None
+        return res
+
+    def revoke_short_links(self, item) -> int:
+        """按图片批量撤销其所有短链，返回撤销条数。"""
+        srv = self.share_server()
+        if srv is None:
+            return 0
+        key = self.resolve_cloud_key(item)
+        if not key:
+            return 0
+        ok, n = srv.revoke_by_key(key)
+        if not ok:
+            self.status.emit(f"撤销失败：{n}", 6000)
+            return 0
+        return n
 
     def share_link(self, item, permanent: bool = False) -> str | None:
         """签名外链（≤7 天）；permanent=True 时对象设公共读，返回永久直链。

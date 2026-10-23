@@ -1,0 +1,42 @@
+# 千寻影集 · Cloudflare Workers 服务端
+# 配合桌面客户端使用：可撤销分享短链 + 图片内联代理 + 收藏同步
+#
+# 部署：npx wrangler deploy
+# 本地：npx wrangler dev
+
+name = "qx-album-server"
+main = "src/index.js"
+compatibility_date = "2026-10-19"
+workers_dev = false
+
+# 自定义域名：img.agentstack.vip 全部路径指向本 Worker
+# 前置条件：agentstack.vip 已接入 Cloudflare 且 NS 生效、img 下无既有 CNAME
+[[routes]]
+pattern = "img.agentstack.vip"
+custom_domain = true
+
+# ---- D1 ----
+[[d1_databases]]
+binding = "DB"
+database_name = "qx-album"
+database_id = "f68b4f3a-485d-4fd7-8aeb-a8c49bda9686"
+
+# ---- 公开变量（非机密）----
+[vars]
+OSS_ENDPOINT = "https://oss-cn-qingdao.aliyuncs.com"
+OSS_BUCKET = "xianlin-oss"
+OSS_REGION = "cn-qingdao"
+# 短链展示域名（用于返回给客户端的 URL）
+PUBLIC_BASE = "https://img.agentstack.vip"
+# HMAC 时间窗（秒），超出即拒绝，防重放
+AUTH_WINDOW = "300"
+
+# ---- 机密（用 wrangler secret put 写入，勿写在此处）----
+# QX_SHARED_SECRET   客户端与服务端共享的 HMAC 密钥
+# OSS_AK_ID          只读 RAM 用户 AK ID
+# OSS_AK_SECRET      只读 RAM 用户 AK Secret
+
+# 观察日志（Free 计划可用，保留 3 天）
+[observability]
+enabled = true
+

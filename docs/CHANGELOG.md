@@ -3,6 +3,67 @@
 本文件记录千寻影集（QianXun Album）的重要变更。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)，版本号遵循语义化版本。
 
+## [1.6.0] - 2026-10-23
+
+新增**分享服务端**（Cloudflare Workers）：可撤销分享短链 + 图片内联代理 + 收藏同步。
+客户端接入短链生成与撤销。
+
+### 新增：分享服务端（`server/`）
+
+部署于 `https://img.agentstack.vip`，D1 库 `qx-album`。详见 [server/README.md](../server/README.md)。
+
+- **可撤销短链**：右键生成 `/s/<7位base62>` 短链，撤销后访问返回 **410**。
+  补上了 OSS 签名链接「无法提前作废」的长期缺口（`docs/OSS_DEV_MANUAL.md` §7 早已记录此限制）。
+- **图片内联代理**：剥掉 OSS 的 `x-oss-force-download: true` 与
+  `Content-Disposition: attachment`，改为 `inline`，浏览器直接看图。
+- **收藏同步**：D1 `favorites` 表，LWW（`updated_at` 大者胜）。
+- **鉴权**：预共享密钥 + HMAC-SHA256（Web Crypto），时间窗 300 秒。
+- **OSS 只读**：专用 RAM 用户，实测 `GetObject`/`ListObjects` 通过、`PutObject`/`DeleteObject` 均 403。
+
+### 关键实测结论
+
+**OSS 强制下载无法用参数绕过**。2025 年后新建的 Bucket，用默认域名访问图片类对象时
+OSS 强制附加两个响应头；`response-content-disposition=inline` 参数**完全无效**：
+
+| 方式 | `x-oss-force-download` | `Content-Disposition` |
+|---|---|---|
+| 默认签名 URL | `true` | `attachment` |
+| ＋`response-content-disposition=inline` | `true` | `attachment`（**参数无效**） |
+| ＋`inline; filename=...` | `true` | `attachment`（**参数无效**） |
+| 经本服务端代理 | 无 | `inline; filename=...` ✅ |
+
+只有换出口（自定义域名需 ICP 备案，或代理）能解决，代理是免备案的那条路。
+
+### 客户端变更
+
+- 新增 `src/core/share_server.py`：服务端 API 客户端（HMAC 签名、短链增删查、收藏同步）。
+- 新增设置项：服务端地址、共享密钥（**DPAPI 加密**，与 OSS Secret 同一套）、启用开关、
+  「测试服务端连接」按钮（先 `/health` 再用密钥签一个只读请求验证鉴权）。
+- 右键菜单：启用服务端时显示「复制分享短链（可撤销）」与「撤销该图的分享短链」；
+  未启用时保持原「复制外链（限时签名）」。
+- 短链失败自动降级：弹窗询问后回退到直连签名外链。
+
+### 踩坑记录（都写进了 server/README.md）
+
+- **`wrangler secret put` 会创建新部署并把代码回滚到旧版本**：先 deploy 后写 secret
+  会导致运行时 `QX_SHARED_SECRET: MISSING`；更隐蔽的是某次 secret 变更后代码变旧，
+  表现为**短链重新出现强制下载头**。正确顺序是「写完所有 secret 后再 deploy」。
+- **`workers_dev = true` 会让部署在最后一步失败**，但脚本其实已上传，形成「报错但半成功」。
+- **Cloudflare 会拦没有 UA 的请求**：Python urllib 默认 UA 返回 `error code: 1010`，
+  这不是 Worker 的响应。客户端互调必须带 `User-Agent`。
+- **OSS V4 签名两处非直觉细节**（自研 Web Crypto 实现时踩到）：
+  `CanonicalURI` **必须带桶名**（`/<bucket>/<key>`），但请求 URL **不能带**；
+  `CanonicalHeaders` 要留**空串**，不能写 `host:...`。这两点靠读 OSS 返回的
+  `<CanonicalRequest>` 逐行对照才定位。
+- **签名只覆盖路径、不含 query**：客户端与服务端必须在这一点对齐，否则带
+  `?limit=...` 的 GET 全部 401。
+
+### 实测记录
+
+服务端 6 步全链路：未签名 401 → 建链 201 → 代理出图 200（`inline`、无 force-download、
+PNG 头正确）→ 访问计数 hits=1 → 撤销 200 → 再访问 410。
+客户端联调：DPAPI 密钥往返一致、真实建链成功、短链出图 `inline`、撤销后 410。
+
 ## [1.5.6] - 2026-10-22
 
 补齐 v1.5.4/v1.5.5 之后仍遗留的三处真实缺陷，均经实测确认。
