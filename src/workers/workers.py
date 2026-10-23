@@ -283,6 +283,42 @@ class UploadWorker(QRunnable):
         _emit(self.signals.finished, counter["up"], counter["fail"])
 
 
+class FavoriteSyncSignals(QObject):
+    finished = Signal(int, int)   # 上传成功条数, 失败条数
+
+
+class FavoriteSyncWorker(QRunnable):
+    """收藏同步：在后台线程推送/拉取，避免网络请求卡住 UI。
+
+    items: 要推送的 [{key, favorite, updated_at}]
+    pull : 是否顺带拉取云端列表（结果挂在 self.pulled 上供回调读取）
+    """
+
+    def __init__(self, srv, items=None, pull: bool = False):
+        super().__init__()
+        self.srv = srv
+        self.items = items or []
+        self.pull = pull
+        self.pulled: list = []
+        self.signals = FavoriteSyncSignals()
+
+    def run(self):
+        sent = failed = 0
+        # 分批推送（服务端单次上限 500，这里按 200 更稳妥）
+        for i in range(0, len(self.items), 200):
+            chunk = self.items[i:i + 200]
+            ok, _ = self.srv.push_favorites(chunk)
+            if ok:
+                sent += len(chunk)
+            else:
+                failed += len(chunk)
+        if self.pull:
+            ok, data = self.srv.pull_favorites()
+            if ok:
+                self.pulled = data
+        _emit(self.signals.finished, sent, failed)
+
+
 class MoveSignals(QObject):
     finished = Signal(str, str)   # 原路径, 新路径
     failed = Signal(str, str)

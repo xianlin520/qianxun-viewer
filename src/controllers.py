@@ -25,9 +25,9 @@ from .core.oss_service import (SHARE_EXPIRES, OssIndex, OssLibrary,
 from .core.settings import AppSettings
 from .utils import file_ops
 from .utils.format import human_size
-from .workers.workers import (DecodeWorker, HashWorker, ListWorker, MoveWorker,
-                              OnlineDeleteWorker, ScanWorker, ThumbWorker,
-                              UploadWorker)
+from .workers.workers import (DecodeWorker, FavoriteSyncWorker, HashWorker,
+                              ListWorker, MoveWorker, OnlineDeleteWorker,
+                              ScanWorker, ThumbWorker, UploadWorker)
 
 SORT_MODES = [("random", "随机"), ("time_asc", "时间正序"), ("time_desc", "时间倒序"),
               ("size_asc", "大小正序"), ("size_desc", "大小倒序")]
@@ -119,6 +119,15 @@ class LibraryController(QObject):
         self._cloud_keys = None   # 云端 key 缓存（懒加载，上传后增量维护）
         self.share_error = ""     # 最近一次分享失败原因（供 UI 提示）
         self._share_srv = None    # 分享服务端客户端（惰性构造）
+        # 收藏同步：推送队列 + 合并定时器 + 独立线程池（不与缩略图抢线程）
+        self._fav_pending: dict[str, dict] = {}
+        self._fav_flush_timer = QTimer(self)
+        self._fav_flush_timer.setSingleShot(True)
+        self._fav_flush_timer.setInterval(300)
+        self._fav_flush_timer.timeout.connect(self._flush_favorite_push)
+        self._fav_pool = QThreadPool(self)
+        self._fav_pool.setMaxThreadCount(1)   # 串行，保证推送顺序
+        self._fav_syncing = False
         self.share_blocked = False   # 是否因“阻止公共访问”失败（可降级签名外链）
 
         # 目录变更监听：防抖后自动重扫
@@ -231,7 +240,7 @@ class LibraryController(QObject):
         # 扫描完成后从云端合并收藏：延迟到事件循环空闲再做，
         # 避免同步网络请求卡住「扫描完成」这一刻的 UI
         if not self.trash_mode and not self.online_mode:
-            QTimer.singleShot(1200, self.sync_favorites_from_server)
+            QTimer.singleShot(1200, self.sync_favorites)
 
     # ---------------- 视图组织 ----------------
     def refresh_view(self) -> None:
@@ -507,7 +516,7 @@ class LibraryController(QObject):
         if self.fav_only and not item.favorite:
             self.refresh_view()
         self.status.emit("已加入最爱 ★" if item.favorite else "已取消最爱", 2000)
-        self._push_favorite(item)
+        self._queue_favorite_push(item)
 
     def _favorite_key(self, item) -> str:
         """收藏的跨机标识：用相对图库根目录的路径（与云端 oss_key 同规则）。"""
@@ -517,55 +526,115 @@ class LibraryController(QObject):
         except (ValueError, AttributeError):
             return item.path.name
 
-    def _push_favorite(self, item) -> None:
-        """把单条收藏变更推给服务端。
+    # ---- 推送队列：合并短时间内多次变更，后台线程发出，绝不阻塞 UI ----
+    def _queue_favorite_push(self, item) -> None:
+        """把一条收藏变更放进待推送队列。
 
-        失败静默：本地 favorites.json 才是权威，云端只做跨机同步；
-        下一次启动拉取时会以 LWW 合并，不需要在这里阻塞或报错。"""
+        设计：UI 线程只更新内存与本地文件；网络请求交给后台 worker。
+        短时间内多次点击会合并成一次批量推送（服务端支持 items 数组）。"""
         srv = self.share_server()
         if srv is None or self.trash_mode:
             return
-        try:
-            srv.push_favorites([{
-                "key": self._favorite_key(item),
-                "favorite": bool(item.favorite),
-                "updated_at": int(time.time() * 1000),
-            }])
-        except Exception:
-            pass
+        key = self._favorite_key(item)
+        self._fav_pending[key] = {
+            "key": key,
+            "favorite": bool(item.favorite),
+            "updated_at": int(time.time() * 1000),
+        }
+        # 300ms 内的连续操作合并成一次；期间只留最后一次状态（LWW 语义）
+        self._fav_flush_timer.start()
 
-    def sync_favorites_from_server(self) -> int:
-        """启动时从服务端拉取收藏并与本地合并（LWW：时间戳大者胜）。
-
-        返回新增到本地的收藏数量。云端有、本地无的收藏会被补进 favorites.json。"""
+    def _flush_favorite_push(self) -> None:
+        """把待推送队列交给后台线程（每批最多 200 条）。"""
+        if not self._fav_pending:
+            return
         srv = self.share_server()
-        if srv is None or self.favorites is None:
-            return 0
-        ok, items = srv.pull_favorites()
-        if not ok or not items:
-            return 0
-        added = 0
+        if srv is None:
+            self._fav_pending.clear()
+            return
+        items = list(self._fav_pending.values())
+        self._fav_pending.clear()
+        w = FavoriteSyncWorker(srv, items=items, pull=False)
+        w.signals.finished.connect(
+            lambda sent, failed: self._on_fav_pushed(sent, failed))
+        self._track(w)
+        self._fav_pool.start(w)
+
+    def _on_fav_pushed(self, sent: int, failed: int) -> None:
+        if failed:
+            # 静默：本地是权威，下次双向同步会以 LWW 收敛
+            self.status.emit(f"收藏云端同步失败 {failed} 条（本地已保存）", 3000)
+
+    # ---- 双向同步 ----
+    def sync_favorites(self, notify: bool = False) -> None:
+        """与云端双向同步收藏：先推本地最新变更，再拉云端并 LWW 合并。
+
+        全程在后台线程：网络慢不会卡住界面。"""
+        srv = self.share_server()
+        if srv is None or self.favorites is None or self.trash_mode:
+            return
+        if self._fav_syncing:
+            return                       # 避免重入（扫描完成 + 手动触发）
+        self._fav_syncing = True
         base = self.main_root
         if base is None:
-            return 0
-        for it in items:
-            if not it.get("favorite"):
-                continue
-            rel = str(it.get("key") or "")
-            if not rel or rel in self.favorites.items:
-                continue
-            # 云端有、本地无 → 补进本地（仅在文件确实存在时，避免污染清单）
-            if (base / rel).exists():
-                self.favorites.items[rel] = ""     # added 留空，下次 toggle 会补时间
-                item = self._by_path.get(str((base / rel).resolve()))
-                if item is not None:
-                    item.favorite = True
-                added += 1
-        if added:
+            self._fav_syncing = False
+            return
+
+        # 本地全部收藏（含时间戳）先推上去，保证「本地有、云端无」的条目不会丢
+        local_items = [
+            {"key": k, "favorite": True, "updated_at": self.favorites.updated_at(k)}
+            for k in self.favorites.keys()
+        ]
+        # 本机记录过的「取消收藏」也要推（用 0 时间戳无意义，直接不推，
+        # 取消动作已在 toggle 时实时推送）
+        w = FavoriteSyncWorker(srv, items=local_items, pull=True)
+        w.signals.finished.connect(
+            lambda sent, failed: self._on_fav_sync_done(w, sent, failed, notify))
+        self._track(w)
+        self._fav_pool.start(w)
+
+    def _on_fav_sync_done(self, worker, sent: int, failed: int, notify: bool) -> None:
+        self._fav_syncing = False
+        pulled = getattr(worker, "pulled", [])
+        if not pulled:
+            if notify:
+                self.status.emit(
+                    f"收藏已同步（上传 {sent} 条）"
+                    + (f"，{failed} 条失败" if failed else ""), 4000)
+            return
+
+        base = self.main_root
+        changed = 0
+        if base is not None:
+            for rec in pulled:
+                key = str(rec.get("key") or "")
+                if not key:
+                    continue
+                fav = bool(rec.get("favorite"))
+                ts = int(rec.get("updated_at") or 0)
+                # 只应用「云端更新」的条目；本地更新更晚的保持不变
+                if not self.favorites.set_state(key, fav, ts):
+                    continue
+                # UI 标志必须显式同步：favorite 只在扫描批次里设过一次，
+                # refresh_view() 不会重算它（否则云端取消后界面仍显示星标）。
+                target = self._by_path.get(str((base / key).resolve()))
+                if target is not None:
+                    target.favorite = fav
+                changed += 1
+        if changed:
             self.favorites.save()
             self.refresh_view()
-            self.status.emit(f"已从云端恢复 {added} 个收藏", 4000)
-        return added
+            self.status.emit(f"已从云端同步 {changed} 条收藏变更", 4000)
+        elif notify:
+            self.status.emit(
+                f"收藏已同步（上传 {sent} 条，无远端变更）"
+                + (f"，{failed} 条失败" if failed else ""), 4000)
+
+    # 兼容旧调用名
+    def sync_favorites_from_server(self) -> int:
+        self.sync_favorites()
+        return 0
 
     # ---------------- 图片操作 ----------------
     def remove_item(self, item) -> None:

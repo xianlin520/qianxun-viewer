@@ -149,6 +149,7 @@ class MainWindow(QWidget):
         self.act_trash.setCheckable(True)
         self.act_upload = self.menu_more.addAction("上传到云")
         self.act_shares = self.menu_more.addAction("分享记录")
+        self.act_fav_sync = self.menu_more.addAction("同步收藏到云端")
         self.menu_more.addSeparator()
         self.act_cache = self.menu_more.addAction("缓存管理")
         self.act_settings = self.menu_more.addAction("设置")
@@ -176,6 +177,7 @@ class MainWindow(QWidget):
         self.act_cache.triggered.connect(self._show_cache)
         self.act_upload.triggered.connect(self._show_upload)
         self.act_shares.triggered.connect(self._show_shares)
+        self.act_fav_sync.triggered.connect(self._sync_favorites)
         self.btn_online.toggled.connect(self._on_online_toggled)
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
@@ -805,6 +807,19 @@ class MainWindow(QWidget):
         # 非模态，保持引用避免 GC
         self._dlg_shares = SharesDialog(self.controller, self)
         self._dlg_shares.show()
+
+    def _sync_favorites(self) -> None:
+        """手动触发收藏双向同步。"""
+        if self.controller.share_server() is None:
+            QMessageBox.information(
+                self, "未启用分享服务端",
+                "请先在「设置」里启用分享服务端并填写地址与密钥。")
+            return
+        if self.controller.favorites is None:
+            QMessageBox.information(self, "提示", "当前没有加载图片目录。")
+            return
+        self._status.showMessage("正在同步收藏…", 3000)
+        self.controller.sync_favorites(notify=True)
 
     def _toggle_fullscreen(self) -> None:
         if self.isFullScreen():
