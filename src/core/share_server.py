@@ -27,11 +27,22 @@ TIMEOUT = 20
 
 
 def _sign(secret: str, method: str, path: str, body: bytes, nonce: str) -> dict:
+    """生成签名头。
+
+    与服务端 auth.js 严格对齐：
+      - GET/HEAD 不参与 body hash（服务端直接跳过）
+      - **其它方法（POST/DELETE/…）一律计算 hash，空 body 也要算**
+        —— 服务端对空 body 调 arrayBuffer() 得到 0 字节，
+        sha256("") = e3b0c442...，不是空串。这里曾漏算，
+        导致所有 DELETE（撤销）请求 401。
+    """
     ts = str(int(time.time() * 1000))
-    body_hash = ""
-    if method.upper() not in ("GET", "HEAD") and body:
-        body_hash = hashlib.sha256(body).hexdigest()
-    canonical = "\n".join([method.upper(), path, ts, nonce, body_hash])
+    m = method.upper()
+    if m in ("GET", "HEAD"):
+        body_hash = ""
+    else:
+        body_hash = hashlib.sha256(body or b"").hexdigest()
+    canonical = "\n".join([m, path, ts, nonce, body_hash])
     sig = hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
     return {"X-QX-Timestamp": ts, "X-QX-Signature": sig, "X-QX-Nonce": nonce}
 

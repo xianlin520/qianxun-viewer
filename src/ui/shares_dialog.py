@@ -1,17 +1,19 @@
 # 千寻影集 QianXun Album
 # 版权所有 (C) 羡林i (Y_XianLin)，保留所有权利。
 
-"""分享记录管理：列出服务端已有的短链，支持单条撤销与复制。"""
+"""分享记录管理：列出服务端已有的短链，支持单条/批量撤销、复制。
+
+所有网络请求都在后台线程执行 —— 之前版本在 UI 线程同步循环调用，
+选中 11 条撤销会让窗口「未响应」数秒（实测 CF 单次往返 300~1000ms）。
+"""
 from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
 from PySide6.QtWidgets import (QAbstractItemView, QDialog, QHBoxLayout,
                                QHeaderView, QLabel, QMessageBox, QPushButton,
                                QTableWidget, QTableWidgetItem, QVBoxLayout)
-
-from ..utils.format import human_size
 
 
 def _fmt_time(ms) -> str:
@@ -21,6 +23,28 @@ def _fmt_time(ms) -> str:
         return datetime.fromtimestamp(int(ms) / 1000).strftime("%m-%d %H:%M")
     except (ValueError, OSError, OverflowError):
         return "—"
+
+
+class _WorkerSignals(QObject):
+    done = Signal(object)          # 任意结果（list / dict / True）
+    failed = Signal(str)
+
+
+class _Worker(QRunnable):
+    """把任意阻塞调用丢到后台线程。fn 的返回值通过 done 信号回传。"""
+
+    def __init__(self, fn):
+        super().__init__()
+        self.fn = fn
+        self.signals = _WorkerSignals()
+
+    def run(self):
+        try:
+            result = self.fn()
+        except Exception as exc:                      # noqa: BLE001
+            self.signals.failed.emit(f"{type(exc).__name__}: {exc}")
+            return
+        self.signals.done.emit(result)
 
 
 class SharesDialog(QDialog):
@@ -34,6 +58,10 @@ class SharesDialog(QDialog):
         self.resize(940, 520)
         self.controller = controller
         self._rows: list[dict] = []
+        self._pool = QThreadPool(self)
+        self._pool.setMaxThreadCount(1)     # 串行，避免并发打满
+        self._busy = False
+        self._workers: list = []            # 保活，防止运行中被 GC
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 10, 10, 10)
@@ -75,6 +103,40 @@ class SharesDialog(QDialog):
 
         self.reload()
 
+    # ---------------- 通用：后台执行 ----------------
+    def _run(self, fn, on_done, busy_text: str = "", on_fail=None) -> None:
+        """在后台线程跑 fn，完成后回调 on_done(结果)。期间禁用按钮。"""
+        if busy_text:
+            self.lbl_summary.setText(busy_text)
+        self._set_buttons(False)
+        w = _Worker(fn)
+        w.signals.done.connect(lambda r: self._finish(on_done, r))
+        w.signals.failed.connect(
+            lambda msg: self._finish_failed(on_fail, msg))
+        self._workers.append(w)
+        self._pool.start(w)
+
+    def _finish(self, on_done, result) -> None:
+        self._set_buttons(True)
+        self._workers.clear()       # 该 worker 已回调完成，可释放
+        try:
+            on_done(result)
+        except Exception as exc:                      # noqa: BLE001
+            self.lbl_summary.setText(f"处理结果出错：{type(exc).__name__}: {exc}")
+
+    def _finish_failed(self, on_fail, msg: str) -> None:
+        self._set_buttons(True)
+        self._workers.clear()
+        if on_fail is not None:
+            on_fail(msg)
+        else:
+            self.lbl_summary.setText(f"操作失败：{msg}")
+
+    def _set_buttons(self, enabled: bool) -> None:
+        for b in (self.btn_refresh, self.btn_copy, self.btn_revoke,
+                  self.btn_revoke_all):
+            b.setEnabled(enabled)
+
     # ---------------- 数据 ----------------
     def reload(self) -> None:
         srv = self.controller.share_server()
@@ -82,7 +144,15 @@ class SharesDialog(QDialog):
             self.lbl_summary.setText("未启用分享服务端（设置 → 启用分享服务端）")
             self.table.setRowCount(0)
             return
-        ok, items = srv.list_shares(limit=500)
+        self._run(
+            lambda: srv.list_shares(limit=500),
+            self._on_listed,
+            busy_text="正在加载…",
+            on_fail=lambda m: self.lbl_summary.setText(f"加载失败：{m}"),
+        )
+
+    def _on_listed(self, result) -> None:
+        ok, items = result
         if not ok:
             self.lbl_summary.setText(f"加载失败：{items}")
             return
@@ -125,14 +195,15 @@ class SharesDialog(QDialog):
         if not sel:
             QMessageBox.information(self, "提示", "请先选中记录。")
             return
-        revoked = [it for it in sel if it.get("revoked")]
-        if revoked and len(revoked) == len(sel):
-            QMessageBox.information(self, "提示", "选中的链接都已撤销，复制出去也无法访问。")
+        usable = [it for it in sel if not it.get("revoked")]
+        if not usable:
+            QMessageBox.information(
+                self, "提示", "选中的链接都已撤销，复制出去也无法访问。")
             return
         from PySide6.QtWidgets import QApplication
-        text = "\n".join(it["url"] for it in sel if not it.get("revoked"))
+        text = "\n".join(it["url"] for it in usable)
         QApplication.clipboard().setText(text)
-        self.lbl_summary.setText(f"已复制 {len(text.splitlines())} 条链接到剪贴板")
+        self.lbl_summary.setText(f"已复制 {len(usable)} 条链接到剪贴板")
 
     def _revoke_selected(self) -> None:
         sel = [it for it in self._selected() if not it.get("revoked")]
@@ -150,14 +221,18 @@ class SharesDialog(QDialog):
         srv = self.controller.share_server()
         if srv is None:
             return
-        done = failed = 0
-        for it in sel:
-            ok, _ = srv.revoke(it["token"])
-            done += 1 if ok else 0
-            failed += 0 if ok else 1
-        self.lbl_summary.setText(
-            f"已撤销 {done} 条" + (f"，{failed} 条失败" if failed else ""))
-        self.reload()
+        tokens = [it["token"] for it in sel]
+
+        def work():
+            done = failed = 0
+            for t in tokens:
+                ok, _ = srv.revoke(t)
+                done += 1 if ok else 0
+                failed += 0 if ok else 1
+            return (done, failed)
+
+        self._run(work, self._on_revoked,
+                  busy_text=f"正在撤销 {len(tokens)} 条…")
 
     def _revoke_all(self) -> None:
         active = [it for it in self._rows if not it.get("revoked")]
@@ -175,9 +250,20 @@ class SharesDialog(QDialog):
         srv = self.controller.share_server()
         if srv is None:
             return
-        done = 0
-        for it in active:
-            ok, _ = srv.revoke(it["token"])
-            done += 1 if ok else 0
-        self.lbl_summary.setText(f"已撤销 {done} / {len(active)} 条")
+        tokens = [it["token"] for it in active]
+
+        def work():
+            done = 0
+            for t in tokens:
+                ok, _ = srv.revoke(t)
+                done += 1 if ok else 0
+            return (done, len(tokens) - done)
+
+        self._run(work, self._on_revoked,
+                  busy_text=f"正在撤销全部 {len(tokens)} 条…")
+
+    def _on_revoked(self, result) -> None:
+        done, failed = result
+        self.lbl_summary.setText(
+            f"已撤销 {done} 条" + (f"，{failed} 条失败" if failed else ""))
         self.reload()
