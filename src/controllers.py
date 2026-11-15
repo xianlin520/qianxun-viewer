@@ -20,7 +20,7 @@ from PySide6.QtGui import QPixmap
 from .core import thumbnail
 from .core.favorites import FavoritesStore
 from .core.image_item import ImageItem
-from .core.oss_service import (OssIndex, OssLibrary,
+from .core.oss_service import (OssIndex, OssLibrary, rel_from_key,
                               friendly_error, is_block_public_error)
 from .core.settings import AppSettings
 from .utils import file_ops
@@ -1173,7 +1173,7 @@ class LibraryController(QObject):
         if not key:
             self.status.emit("该图片不在当前图库目录内，无法确定云端路径", 5000)
             return False
-        w = UploadWorker(oss, self.oss_index, [(item.path, key[len("qx/"):], ck)],
+        w = UploadWorker(oss, self.oss_index, [(item.path, rel_from_key(key), ck)],
                          is_cancelled=self.is_cancelled, threads=1)
         loop = QEventLoop()
         result = {"up": 0}

@@ -14,6 +14,17 @@ from pathlib import Path
 
 from .formats import IMAGE_EXTS  # noqa: F401
 PREFIX = "qx/"
+
+
+def rel_from_key(key: str) -> str:
+    """从完整对象 key 取回相对路径。
+
+    调用方原先直接写 `key[len("qx/"):]`，把前缀这个设计决定泄漏到了
+    controllers 里：改 PREFIX 时那里不会报错，只是静默传出一个错误的 key。
+    """
+    if not key.startswith(PREFIX):
+        raise ValueError(f"对象 key 不在 {PREFIX!r} 前缀下：{key!r}")
+    return key[len(PREFIX):]
 # 外链有效期由 settings.share_days 决定（上限 7 天）。
 # 这里曾有一个 SHARE_EXPIRES 常量，无人使用，已删除以免与设置项漂移。
 
