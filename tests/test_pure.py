@@ -206,6 +206,56 @@ class TestSettingsFields(unittest.TestCase):
         self.assertEqual((fields["scan_parallel"].lo, fields["scan_parallel"].hi), (1, 16))
 
 
+
+class TestFavoritesCursor(unittest.TestCase):
+    """游标必须带 key：updated_at 不唯一，只给时间会跳过同毫秒的边界记录。"""
+
+    def _srv(self):
+        from src.core.share_server import ShareServer
+        srv = ShareServer("https://x.test", "secret")
+        seen = {}
+
+        def fake(method, target, payload=None, timeout=None):
+            seen["target"] = target
+            # 线上真实字段名，故意用 snake_case：契约就在这一层
+            return True, {"items": [], "next_cursor": 1000, "next_key": "a/b.jpg"}
+
+        srv._request = fake
+        return srv, seen
+
+    def test_after_key_is_sent(self):
+        srv, seen = self._srv()
+        ok, (items, cursor, key) = srv.pull_favorites(after=1000, after_key="a/b.jpg")
+        self.assertTrue(ok)
+        self.assertIn("after=1000", seen["target"])
+        self.assertIn("after_key=a%2Fb.jpg", seen["target"])
+        self.assertEqual((cursor, key), (1000, "a/b.jpg"))
+
+    def test_without_key_only_after(self):
+        srv, seen = self._srv()
+        srv.pull_favorites(after=1000)
+        self.assertEqual(seen["target"], "/api/favorites?after=1000")
+
+    def test_pull_all_passes_key_forward(self):
+        from src.core.share_server import ShareServer
+        srv = ShareServer("https://x.test", "secret")
+        calls = []
+
+        def fake(method, target, payload=None, timeout=None):
+            calls.append(target)
+            if len(calls) == 1:
+                return True, {"items": [{"key": "a", "favorite": True, "updated_at": 1}],
+                              "next_cursor": 1, "next_key": "a"}
+            return True, {"items": [{"key": "b", "favorite": False, "updated_at": 1}],
+                          "next_cursor": None, "next_key": None}
+
+        srv._request = fake
+        ok, items = srv.pull_all_favorites()
+        self.assertTrue(ok)
+        self.assertEqual([i["key"] for i in items], ["a", "b"])
+        self.assertIn("after_key=a", calls[1])
+
+
 class TestThemePalettes(unittest.TestCase):
     def test_palettes_have_identical_keys(self):
         """两套调色板键必须一致，否则某个主题下会取到空色值。"""

@@ -843,8 +843,14 @@ class LibraryController(QObject):
     def item_by_path(self, path_str: str):
         return self._by_path.get(path_str)
 
-    def request_decode(self, item, callback) -> None:
-        w = DecodeWorker(item, is_cancelled=self.is_cancelled,
+    def request_decode(self, item, callback, should_cancel=None) -> None:
+        """解码一张原图。
+
+        should_cancel：调用方给的额外取消判据（例如「用户已经翻页了」）。
+        解码是整条链上最贵的一步，仅靠控制器级的全局标志挡不住
+        已经被取代但仍排在队里的请求。
+        """
+        w = DecodeWorker(item, is_cancelled=should_cancel or self.is_cancelled,
                          oss=self.oss if item.remote_key else None)
         if callback is not None:
             w.signals.ready.connect(callback)

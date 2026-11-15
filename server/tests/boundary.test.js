@@ -21,7 +21,7 @@ import { verifyRequest } from "../src/auth.js";
 import { tooManyRequests } from "../src/ratelimit.js";
 import { presignGetUrl } from "../src/oss.js";
 import { makeToken, parseShortPath, isExpired } from "../src/shares.js";
-import { validateItem, ValidationError } from "../src/favorites.js";
+import { validateItem, ValidationError, pullFavorites } from "../src/favorites.js";
 import { escapeHtml, escapeAttr, jsonLiteral, safeExt } from "../src/html.js";
 
 const SECRET = "test-shared-secret";
@@ -354,6 +354,72 @@ test("收藏：脏数据整批拒绝，不做兜底替换", () => {
   for (const it of bad) {
     assert.throws(() => validateItem(it, 0), ValidationError, JSON.stringify(it));
   }
+});
+
+// ---------------- 收藏游标 ----------------
+
+/** 记录 SQL 与参数，返回预置行的 D1 替身。 */
+function recordingDb(rows) {
+  const calls = [];
+  return {
+    calls,
+    prepare(sql) {
+      return {
+        bind(...args) {
+          return {
+            async all() {
+              calls.push({ sql, args });
+              return { results: rows };
+            },
+          };
+        },
+      };
+    },
+  };
+}
+
+const FAV_ENV = (db) => ({ DB: db });
+
+test("游标：只给 after 时退回单条件（兼容旧客户端）", async () => {
+  const db = recordingDb([]);
+  await pullFavorites(FAV_ENV(db), { after: 1000 });
+  const { sql, args } = db.calls[0];
+  assert.ok(!sql.includes("updated_at = ?"), "不该出现复合条件");
+  assert.ok(args.includes(1000));
+});
+
+test("游标：给 afterKey 时用复合条件，同毫秒记录不会跨页跳过", async () => {
+  const db = recordingDb([]);
+  await pullFavorites(FAV_ENV(db), { after: 1000, afterKey: "b.jpg" });
+  const { sql, args } = db.calls[0];
+  assert.ok(sql.includes("updated_at > ? OR (updated_at = ? AND oss_key > ?)"),
+            `SQL 缺少复合游标：${sql}`);
+  assert.equal(args.filter((a) => a === 1000).length, 2, "时间戳应绑定两次");
+  assert.ok(args.includes("b.jpg"), "应绑定游标 key");
+});
+
+test("游标：定序含 oss_key，与复合游标一致", async () => {
+  const db = recordingDb([]);
+  await pullFavorites(FAV_ENV(db), {});
+  assert.ok(db.calls[0].sql.includes("ORDER BY updated_at ASC, oss_key ASC"),
+            `定序不对：${db.calls[0].sql}`);
+});
+
+test("游标：还有下一页时同时返回时间与 key", async () => {
+  const rows = Array.from({ length: 3 }, (_, i) => ({
+    oss_key: `k${i}.jpg`, favorite: i % 2, updated_at: 1000 + i,
+  }));
+  const res = await pullFavorites(FAV_ENV(recordingDb(rows)), { limit: 2 });
+  assert.equal(res.items.length, 2);
+  assert.equal(res.nextCursor, 1001);
+  assert.equal(res.nextKey, "k1.jpg");
+});
+
+test("游标：最后一页时两个游标都是 null", async () => {
+  const rows = [{ oss_key: "a.jpg", favorite: 1, updated_at: 1000 }];
+  const res = await pullFavorites(FAV_ENV(recordingDb(rows)), { limit: 10 });
+  assert.equal(res.nextCursor, null);
+  assert.equal(res.nextKey, null);
 });
 
 // ---------------- HTML 转义 ----------------

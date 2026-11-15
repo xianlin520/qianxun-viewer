@@ -82,7 +82,11 @@ class ViewerOverlay(QWidget):
         # 适应窗口但不放大超过 100%，避免小缓存图导致原图被拉得过大
         self._scale = min(self._fit_scale(), 1.0)
         self._offset = QPointF(0, 0)
-        self.controller.request_decode(item, self._on_decoded)
+        # 只解码仍在使用的那张：翻页/关闭后，排在队里的旧请求在下载与
+        # 解码前各判一次，直接退出，不再白算一张全分辨率图
+        self.controller.request_decode(
+            item, self._on_decoded,
+            should_cancel=lambda: (not self.isVisible()) or self._current_path() != str(item.path))
         for d in (-1, 1):                                # 预加载前后各 1 张
             ni = self._index + d
             if 0 <= ni < len(items):
@@ -113,6 +117,16 @@ class ViewerOverlay(QWidget):
             self._scale = min(self._fit_scale(), 1.0)
             self._offset = QPointF(0, 0)
         self.update()
+
+    def _current_path(self) -> str:
+        """当前应显示的那张图的路径；索引越界或没图时返回空串。"""
+        try:
+            items = self.controller.view_items
+            if 0 <= self._index < len(items):
+                return str(items[self._index].path)
+        except Exception:
+            pass
+        return ""
 
     def _on_decoded(self, path_str, qimg) -> None:
         # 已经关闭：迟到的解码结果直接丢弃，否则刚释放的位图又被装回来

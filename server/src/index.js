@@ -142,13 +142,18 @@ async function getFavorites(request, env, url) {
   const r = await pullFavorites(env, {
     since: url.searchParams.get("since"),
     after: url.searchParams.get("after"),
+    afterKey: url.searchParams.get("after_key"),
     limit: clampLimit(url.searchParams.get("limit"), 1000, 1000),
   });
   return json({
     ok: true,
     count: r.items.length,
     items: r.items,
+    // 两个游标必须成对出现：updated_at 不唯一，单给时间会漏掉同毫秒的边界记录。
+    // 此前这里只序列化 next_cursor，而客户端读的是驼峰 nextCursor，
+    // 两边字段名从未对上，游标恒为 null，翻页从来没真正发生过。
     next_cursor: r.nextCursor,
+    next_key: r.nextKey,
   });
 }
 

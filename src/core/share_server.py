@@ -23,6 +23,7 @@ import secrets
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import quote
 
 UA = "qx-album/1.0 (+desktop client)"
 # 普通接口 10 秒；健康检查与单条撤销这类轻请求 5 秒。
@@ -135,7 +136,6 @@ class ShareServer:
 
     def list_shares(self, oss_key: str = "", limit: int = 200, before: int | None = None):
         """返回 (ok, (items, next_cursor))。"""
-        from urllib.parse import quote
 
         parts = [f"limit={int(limit)}"]
         if oss_key:
@@ -181,7 +181,8 @@ class ShareServer:
         """items: [{key, favorite, updated_at}]"""
         return self._request("POST", "/api/favorites", {"items": items})
 
-    def pull_favorites(self, since: int = 0, after: int | None = None):
+    def pull_favorites(self, since: int = 0, after: int | None = None,
+                       after_key: str | None = None):
         """拉一页收藏，返回 (ok, (items, next_cursor))。
 
         服务端单页上限 1000，超出的靠 next_cursor 翻页。此前这里把
@@ -193,23 +194,30 @@ class ShareServer:
             parts.append(f"since={int(since)}")
         if after:
             parts.append(f"after={int(after)}")
+        if after_key:
+            # 游标必须带 key：updated_at 不唯一，只给时间会跳过同毫秒的边界记录
+            parts.append("after_key=" + quote(str(after_key), safe=""))
         q = ("?" + "&".join(parts)) if parts else ""
         ok, data = self._request("GET", "/api/favorites" + q)
         if not ok:
             return False, data
         if not isinstance(data, dict):
             return False, "服务端返回格式异常"
-        return True, (data.get("items", []), data.get("nextCursor"))
+        # 字段名以服务端 JSON 为准（snake_case）。此前这里读的是驼峰
+        # nextCursor/nextKey，而路由返回 next_cursor/next_key，两边从未对上，
+        # 游标恒为 None，于是「翻页到底」从来没发生过。
+        return True, (data.get("items", []), data.get("next_cursor"),
+                      data.get("next_key"))
 
     def pull_all_favorites(self, since: int = 0, max_pages: int = 100):
         """翻页拉全，返回 (ok, items)。用于「同步后覆盖本地」这类必须看全的场合。"""
         out: list = []
-        cursor = None
+        cursor = key = None
         for _ in range(max_pages):
-            ok, res = self.pull_favorites(since=since, after=cursor)
+            ok, res = self.pull_favorites(since=since, after=cursor, after_key=key)
             if not ok:
                 return False, res
-            items, cursor = res
+            items, cursor, key = res
             out.extend(items)
             if not cursor or not items:
                 return True, out

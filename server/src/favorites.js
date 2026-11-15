@@ -79,9 +79,12 @@ export async function pushFavorites(env, items) {
 
 /**
  * 拉取收藏。
- * since 为下界（毫秒），after 为游标（上一页最后一条的 updated_at）。
+ *
+ * since 为下界（毫秒）；after/afterKey 是上一页最后一条的游标。
+ * 游标必须带 oss_key：updated_at 不唯一，同一毫秒的多条记录若正好跨页，
+ * 只用 `updated_at > ?` 会把边界上的同值记录整批跳过（客户端表现为丢收藏）。
  */
-export async function pullFavorites(env, { since, after, limit } = {}) {
+export async function pullFavorites(env, { since, after, afterKey, limit } = {}) {
   const lim = Math.min(Math.max(Number(limit) || MAX_PULL, 1), MAX_PULL);
   const cond = [];
   const args = [];
@@ -93,13 +96,21 @@ export async function pullFavorites(env, { since, after, limit } = {}) {
   }
   const a = Number(after);
   if (Number.isFinite(a) && a > 0) {
-    cond.push("updated_at > ?");
-    args.push(Math.trunc(a));
+    const ts = Math.trunc(a);
+    if (typeof afterKey === "string" && afterKey) {
+      // 复合游标：时间更大的全部，或时间相同但 key 更大的（按 oss_key 定序）
+      cond.push("(updated_at > ? OR (updated_at = ? AND oss_key > ?))");
+      args.push(ts, ts, afterKey);
+    } else {
+      cond.push("updated_at > ?");
+      args.push(ts);
+    }
   }
 
   let sql = `SELECT oss_key, favorite, updated_at FROM favorites`;
   if (cond.length) sql += " WHERE " + cond.join(" AND ");
-  sql += " ORDER BY updated_at ASC LIMIT ?";
+  // 定序必须与游标一致，否则同一毫秒内跨页会重复或漏项
+  sql += " ORDER BY updated_at ASC, oss_key ASC LIMIT ?";
   args.push(lim + 1);
 
   const r = await env.DB.prepare(sql).bind(...args).all();
@@ -114,5 +125,7 @@ export async function pullFavorites(env, { since, after, limit } = {}) {
       updated_at: x.updated_at,
     })),
     nextCursor: hasMore && page.length ? page[page.length - 1].updated_at : null,
+    // 与 nextCursor 配对使用；单给 nextCursor 会漏掉同毫秒的边界记录
+    nextKey: hasMore && page.length ? page[page.length - 1].oss_key : null,
   };
 }

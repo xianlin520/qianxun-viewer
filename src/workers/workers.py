@@ -118,6 +118,10 @@ class DecodeWorker(QRunnable):
             except Exception:
                 _emit(self.signals.failed, str(self.item.path), "下载原图失败")
                 return
+            # 下载可能耗时十几秒，期间用户早翻到别的图了。
+            # 解码整幅原图是最贵的一步（108MP 图峰值 1.3GB），值得再判一次。
+            if self.is_cancelled and self.is_cancelled():
+                return
             im = thumbnail.decode_original(dest)
             # 原图临时缓存无上限会一直涨（本机实测已 753MB），解码完做一次 LRU 淘汰
             try:
@@ -126,6 +130,8 @@ class DecodeWorker(QRunnable):
             except Exception:
                 pass
         else:
+            if self.is_cancelled and self.is_cancelled():
+                return
             im = thumbnail.decode_original(self.item.path)
         if im is None:
             _emit(self.signals.failed, str(self.item.path), "解码失败或文件损坏")
