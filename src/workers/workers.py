@@ -190,7 +190,8 @@ class HashWorker(QRunnable):
                     it.phash = ph
                 _emit(self.signals.progress, i + 1, len(todo))
             _emit(self.signals.finished,
-                  duplicates.find_groups(self.items, self.threshold))
+                  duplicates.find_groups(self.items, self.threshold,
+                                         is_cancelled=self.is_cancelled))
         except Exception as exc:
             _emit(self.signals.failed, str(exc))
 

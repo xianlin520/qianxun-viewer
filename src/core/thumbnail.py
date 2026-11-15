@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import os
 import time
+from functools import lru_cache
 from pathlib import Path
 
 from PIL import Image, ImageOps
@@ -30,18 +31,19 @@ def cache_key(item) -> str:
     return hashlib.sha1(raw.encode("utf-8", "surrogatepass")).hexdigest()
 
 
-def cache_root_for(image_root: Path) -> Path:
-    """本地缓存根目录（不写入图片目录，避免云同步流量）。
+@lru_cache(maxsize=64)
+def _cache_root_cached(raw: str) -> Path:
+    """缓存根目录的实际计算。
 
-    在线模式用的是虚拟根（`oss@<bucket>`），它不存在于文件系统上，
-    对它调 resolve() 会按**当前工作目录**解析出不同路径 —— 换个目录启动
-    同一个桶就会得到两个缓存目录、互相清不掉。因此虚拟根不做 resolve。"""
-    raw = str(image_root)
+    resolve() 加 sha1 是纯 CPU + 系统调用，而 cache_root_for 会被
+    thumb_path 每张图调用一次，fast_pixmap 一次循环还查两档。
+    此前同一次操作里同一个目录被 resolve 并哈希几十上百次。
+    """
     if raw.startswith("oss@"):
         norm = raw
     else:
         try:
-            norm = str(image_root.resolve())
+            norm = str(Path(raw).resolve())
         except OSError:
             norm = raw
     key = hashlib.sha1(norm.encode("utf-8", "surrogatepass")).hexdigest()[:16]
@@ -50,12 +52,24 @@ def cache_root_for(image_root: Path) -> Path:
     return base / "QianXunViewer" / "cache" / key
 
 
+def cache_root_for(image_root: Path) -> Path:
+    """本地缓存根目录（不写入图片目录，避免云同步流量）。
+
+    在线模式用的是虚拟根（`oss@<bucket>`），它不存在于文件系统上，
+    对它调 resolve() 会按**当前工作目录**解析出不同路径 —— 换个目录启动
+    同一个桶就会得到两个缓存目录、互相清不掉。因此虚拟根不做 resolve。
+    """
+    return _cache_root_cached(str(image_root))
+
+
+def clear_cache_root_memo() -> None:
+    """清掉路径记忆（切换库、测试时用）。"""
+    _cache_root_cached.cache_clear()
+
+
 def thumb_path(image_root: Path, item, size: int) -> Path:
     return cache_root_for(image_root) / str(size) / f"{cache_key(item)}.jpg"
 
-
-def has_cache(image_root: Path, item, size: int) -> bool:
-    return thumb_path(image_root, item, size).exists()
 
 
 def _phash_of(im: Image.Image) -> str:

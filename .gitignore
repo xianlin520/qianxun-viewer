@@ -21,6 +21,7 @@ dist/
 node_modules/
 .wrangler/
 server/dist/
+server/.dryrun/
 server/.dev.vars
 *.log
 

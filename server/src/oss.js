@@ -17,31 +17,9 @@
  * 约束：x-oss-expires 1~604800 秒；x-oss-date 与派生密钥的 Date 必须同一天。
  */
 
+import { sha256Hex, hmacRaw, hex } from "./crypto.js";
+
 const enc = new TextEncoder();
-
-async function sha256Bytes(data) {
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", data));
-}
-
-async function sha256Hex(data) {
-  const b = await sha256Bytes(data);
-  return [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
-}
-
-async function hmacRaw(keyBytes, msgStr) {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    keyBytes,
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  return new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(msgStr)));
-}
-
-function hex(b) {
-  return [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
-}
 
 /** RFC 3986 编码，OSS 要求（空格为 %20，斜杠保留由调用方决定） */
 function rfc3986(str, keepSlash = false) {
@@ -83,6 +61,7 @@ function dayStamp(d = new Date()) {
  * @param {string} o.akSecret
  * @param {number} [o.expires] 秒，1~604800
  * @param {Record<string,string>} [o.extraQuery] 额外查询参数（会参与签名）
+ * @param {Date} [o.now] 注入当前时间，仅用于测试可重复性
  * @returns {Promise<string>}
  */
 export async function presignGetUrl({
@@ -94,8 +73,8 @@ export async function presignGetUrl({
   akSecret,
   expires = 3600,
   extraQuery = {},
+  now = new Date(),
 }) {
-  const now = new Date();
   const date = ossDate(now);
   const day = dayStamp(now);
   const scope = `${day}/${region}/oss/aliyun_v4_request`;

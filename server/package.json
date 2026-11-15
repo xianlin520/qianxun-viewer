@@ -1,5 +1,19 @@
 {
+  "name": "qx-album-server",
+  "version": "1.6.5",
+  "private": true,
+  "type": "module",
+  "description": "千寻影集分享服务端：可撤销短链 + 图片代理 + 收藏同步（Cloudflare Workers + D1）",
+  "scripts": {
+    "test": "node --test tests/**/*.test.js",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:check": "wrangler deploy --dry-run --outdir=.dryrun"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "devDependencies": {
-    "wrangler": "^4.152.0"
+    "wrangler": "~4.152.0"
   }
 }

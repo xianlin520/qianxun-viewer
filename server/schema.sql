@@ -11,11 +11,14 @@ CREATE TABLE IF NOT EXISTS shares (
   revoked_at  INTEGER,                   -- 撤销时间
   hits        INTEGER NOT NULL DEFAULT 0,-- 累计访问次数
   first_hit   INTEGER,                   -- 首次访问
-  last_hit    INTEGER                    -- 最后访问
+  last_hit    INTEGER,                   -- 最后访问
+  expires_at  INTEGER                    -- 可选过期时间 epoch ms；NULL = 长期有效
 );
 
 CREATE INDEX IF NOT EXISTS idx_shares_key     ON shares(oss_key);
 CREATE INDEX IF NOT EXISTS idx_shares_revoked ON shares(revoked);
+-- listShares 用 created_at 做游标翻页
+CREATE INDEX IF NOT EXISTS idx_shares_created ON shares(created_at);
 
 -- 收藏列表同步（LWW：updated_at 大者胜）
 CREATE TABLE IF NOT EXISTS favorites (

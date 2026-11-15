@@ -4,48 +4,38 @@
  * 请求头：
  *   X-QX-Timestamp : 毫秒时间戳
  *   X-QX-Signature : hex(HMAC-SHA256(secret, canonical))
- *   X-QX-Nonce     : 可选，随机串（参与签名，配合时间窗降低重放面）
+ *   X-QX-Nonce     : 可选，随机串。参与签名，但服务端不存储比对，
+ *                    因此它不防重放 —— 重放窗口等于 AUTH_WINDOW（默认 300 秒）。
+ *                    要真正防重放需要把 nonce 落库去重，本期未做。
  *
- * canonical = METHOD \n PATH \n TIMESTAMP \n NONCE \n hex(SHA256(body))
+ * canonical = METHOD \n PATH?QUERY \n TIMESTAMP \n NONCE \n hex(SHA256(body))
  *
- * 设计要点：
- * - 用 Web Crypto（Workers 官方推荐路径，比纯 JS 快得多）
- * - 时间窗默认 300s，超出直接 401（防重放）
- * - 计时安全比较：用 crypto.subtle.timingSafeEqual（Workers 非标准扩展），
- *   不可用时退化为常量时间字符串比较
+ * 现在 query 也参与签名。此前只签 pathname，被截获的请求可以改 query
+ * 重放（例如把 limit 放大）。旧客户端仍按 path 签名，用
+ * ALLOW_LEGACY_SIG=0 可强制只认新签名；默认 1 以便平滑升级。
  */
 
-const enc = new TextEncoder();
+import { sha256Hex, hmacHex, safeEqual } from "./crypto.js";
 
-async function sha256Hex(data) {
-  const buf = await crypto.subtle.digest("SHA-256", data);
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
+const DEFAULT_WINDOW_SEC = 300;
+const MAX_WINDOW_SEC = 3600;
 
-async function hmacHex(secret, message) {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    enc.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(message));
-  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-/** 常量时间比较，避免通过响应时间猜签名 */
-function safeEqual(a, b) {
-  if (typeof a !== "string" || typeof b !== "string") return false;
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
+/**
+ * 解析时间窗配置。
+ *
+ * AUTH_WINDOW 是字符串形式的 vars，写成 "abc" 会得到 NaN，
+ * 而 `skew > NaN` 恒为 false，等于把时间窗彻底关掉。这里显式校验，
+ * 非法值退回默认 300 秒，并夹取上限避免误配成超大窗口。
+ */
+function authWindowSec(env) {
+  const raw = Number(env.AUTH_WINDOW);
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_WINDOW_SEC;
+  return Math.min(raw, MAX_WINDOW_SEC);
 }
 
 /**
  * 校验请求签名。
- * @returns {Promise<{ok: true} | {ok: false, status: number, error: string}>}
+ * @returns {Promise<{ok: true, legacy?: true} | {ok: false, status: number, error: string}>}
  */
 export async function verifyRequest(request, env) {
   const secret = env.QX_SHARED_SECRET;
@@ -66,13 +56,13 @@ export async function verifyRequest(request, env) {
     return { ok: false, status: 401, error: "bad_timestamp" };
   }
 
-  const windowSec = Number(env.AUTH_WINDOW || 300);
+  const windowSec = authWindowSec(env);
   const skew = Math.abs(Date.now() - tsNum) / 1000;
   if (skew > windowSec) {
     return { ok: false, status: 401, error: "timestamp_out_of_window" };
   }
 
-  // 读取 body 用于签名（注意：调用方需保证 body 未被消费）
+  // 读取 body 用于签名（调用方需保证 body 未被消费）
   let bodyHash = "";
   if (request.method !== "GET" && request.method !== "HEAD") {
     const raw = await request.clone().arrayBuffer();
@@ -80,25 +70,28 @@ export async function verifyRequest(request, env) {
   }
 
   const url = new URL(request.url);
+  const method = request.method.toUpperCase();
+  const given = sig.toLowerCase();
+
+  // 当前协议：path + query 一起签名
   const canonical = [
-    request.method.toUpperCase(),
-    url.pathname,
+    method,
+    url.pathname + url.search,
     ts,
     nonce,
     bodyHash,
   ].join("\n");
-
-  const expected = await hmacHex(secret, canonical);
-  if (!safeEqual(expected, sig.toLowerCase())) {
-    return { ok: false, status: 401, error: "bad_signature" };
+  if (safeEqual(await hmacHex(secret, canonical), given)) {
+    return { ok: true };
   }
 
-  return { ok: true };
-}
+  // 兼容窗口：旧客户端只签 path。设为 "0" 即关闭，建议下次发版后关掉。
+  if (String(env.ALLOW_LEGACY_SIG ?? "1") !== "0") {
+    const legacy = [method, url.pathname, ts, nonce, bodyHash].join("\n");
+    if (safeEqual(await hmacHex(secret, legacy), given)) {
+      return { ok: true, legacy: true };
+    }
+  }
 
-/** 供客户端实现参考的签名辅助（README 里同步给出 Python 版本） */
-export async function signForClient(secret, method, path, ts, nonce, bodyBytes) {
-  const bodyHash = bodyBytes ? await sha256Hex(bodyBytes) : "";
-  const canonical = [method.toUpperCase(), path, ts, nonce, bodyHash].join("\n");
-  return hmacHex(secret, canonical);
+  return { ok: false, status: 401, error: "bad_signature" };
 }

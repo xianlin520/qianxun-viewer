@@ -18,6 +18,7 @@ from ..controllers import ASPECT_PRESETS, SORT_MODES, LibraryController
 from ..core.settings import AppSettings
 from ..utils import file_ops
 from ..utils.paths import base_dir
+from .async_call import AsyncCaller
 from .cache_dialog import CacheDialog
 from .duplicates_dialog import DuplicatesDialog
 from .grid_view import GridView, ImageModel, ThumbDelegate
@@ -49,7 +50,7 @@ class MainWindow(QWidget):
         self.view = GridView(self)
         self.view.setModel(self.model)
         self.view.setItemDelegate(self.delegate)
-        self.view.setGridSize(self.delegate.sizeHint(None, None))
+        self.view.setGridSize(self.delegate.card_size())
         self.pager = PagerBar(self)
         self.view.pager = self.pager
         self.pager.hide()
@@ -269,7 +270,7 @@ class MainWindow(QWidget):
         self.view.setVisible(page)
         self.delegate.show_buttons = page
         self.view.buttons_enabled = page
-        self.view.setGridSize(self.delegate.sizeHint(None, None))
+        self.view.setGridSize(self.delegate.card_size())
         if page:
             self.controller.ensure_visible_thumbs(*self.view.visible_range())
         else:
@@ -419,14 +420,28 @@ class MainWindow(QWidget):
         """检测新版本。
 
         manual=False 为启动后的静默检测：失败不打扰，已被忽略的版本也不提示。
-        manual=True 为用户主动点「检查更新」：无论结果都给反馈。"""
+        manual=True 为用户主动点「检查更新」：无论结果都给反馈。
+
+        网络请求放后台线程。此前在 GUI 线程同步 urlopen(timeout=12)，
+        Gitee 慢或被拦时启动 3 秒后窗口无响应最长 12 秒，用户会以为程序挂了。
+        """
         from ..core import updater
 
-        if not manual:
-            # 静默模式下不重复询问同一已被跳过的版本
-            pass
+        if not hasattr(self, "_update_async"):
+            self._update_async = AsyncCaller(self)
+        self._update_async.run(
+            lambda: updater.check_latest(),
+            on_done=lambda result: self._on_update_result(result, manual),
+            on_fail=lambda msg: self._on_update_error(msg, manual),
+        )
 
-        info, err = updater.check_latest()
+    def _on_update_error(self, message: str, manual: bool) -> None:
+        if manual:
+            QMessageBox.information(
+                self, "检查更新", f"暂时无法获取版本信息。\n\n{message}")
+
+    def _on_update_result(self, result, manual: bool) -> None:
+        info, err = result
 
         if info is None:
             if manual:

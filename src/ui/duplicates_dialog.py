@@ -10,10 +10,32 @@ from PySide6.QtWidgets import (QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel,
                                QMessageBox, QPushButton, QScrollArea,
                                QGraphicsOpacityEffect, QVBoxLayout, QWidget)
 
-from ..core import thumbnail
+from .thumb_cache import THUMBS
 from ..utils.format import human_size, human_time
 
 CELL = 170
+
+
+class _LazyOpacity:
+    """按需创建 QGraphicsOpacityEffect。
+
+    常态什么都不挂；只有用户勾选「排除（非重复）」时才加效果，
+    取消勾选就移除，避免几十张预览同时走离屏合成。
+    """
+
+    def __init__(self, widget):
+        self._w = widget
+        self._eff = None
+
+    def set_dim(self, on: bool) -> None:
+        if on:
+            if self._eff is None:
+                self._eff = QGraphicsOpacityEffect(self._w)
+            self._eff.setOpacity(0.3)
+            self._w.setGraphicsEffect(self._eff)
+        elif self._eff is not None:
+            self._w.setGraphicsEffect(None)
+            self._eff = None
 
 
 class DuplicatesDialog(QDialog):
@@ -45,6 +67,9 @@ class DuplicatesDialog(QDialog):
         self._checks: list[list[QCheckBox]] = []
         self._groups = groups
         self._group_excl: list[QCheckBox] = []
+        # 每组的两个操作按钮与结果文案：处理过就置灰，避免对同一组二次操作
+        self._row_btns: list[tuple[QPushButton, QPushButton]] = []
+        self._row_status: list[QLabel] = []
         for gi, group in enumerate(groups):
             trow = QHBoxLayout()
             title = QLabel(f"第 {gi + 1} 组（{len(group)} 张）")
@@ -74,8 +99,10 @@ class DuplicatesDialog(QDialog):
                         Qt.TransformationMode.SmoothTransformation))
                 else:
                     lbl.setText("无预览")
-                eff = QGraphicsOpacityEffect(lbl)
-                lbl.setGraphicsEffect(eff)
+                # 不给每张预览都挂 QGraphicsOpacityEffect：
+                # 该效果会让 QLabel 走离屏合成，几十组 × 每组数张时
+                # 首次打开明显延迟、滚动发涩。改成勾选时按需挂上。
+                eff = _LazyOpacity(lbl)
                 cell.addWidget(lbl)
                 info = QLabel(f"{item.path.name}\n"
                               f"{human_size(item.size_bytes)} · {human_time(item.mtime)}")
@@ -84,8 +111,7 @@ class DuplicatesDialog(QDialog):
                 cell.addWidget(info)
                 chk = QCheckBox("排除（非重复）")
                 chk.setStyleSheet("color:#8a8f98;")
-                chk.toggled.connect(
-                    lambda on, e=eff: e.setOpacity(0.3 if on else 1.0))
+                chk.toggled.connect(lambda on, e=eff: e.set_dim(on))
                 cell.addWidget(chk)
                 checks.append(chk)
                 row.addLayout(cell)
@@ -102,9 +128,16 @@ class DuplicatesDialog(QDialog):
             if online:
                 for b in (b1, b2):
                     b.setToolTip("在线模式：确认后将永久删除云端重复对象（不可逆）")
+            st_lbl = QLabel("")
+            st_lbl.setStyleSheet("color:#6ee7a8;font-size:11px;")
+            st_lbl.setWordWrap(True)
+            st_lbl.setFixedWidth(96)
             btns.addWidget(b1)
             btns.addWidget(b2)
+            btns.addWidget(st_lbl)
             btns.addStretch(1)
+            self._row_btns.append((b1, b2))
+            self._row_status.append(st_lbl)
             row.addLayout(btns)
             row_w = QWidget()
             row_w.setLayout(row)
@@ -150,70 +183,84 @@ class DuplicatesDialog(QDialog):
         root = self.controller.cache_root or self.controller.root
         if root is None:
             return QPixmap()
-        for tier in (512, 256):
-            fp = thumbnail.thumb_path(root, item, tier)
-            if fp.exists():
-                pix = QPixmap(str(fp))
-                if not pix.isNull():
-                    return pix
-        return QPixmap()
+        pix = THUMBS.best(root, item)
+        return pix if pix is not None else QPixmap()
 
     def _batch(self, by: str) -> None:
         """跨组一键批处理：每个未排除组保留一张，其余移出/删除。"""
         if self._busy:
             return                      # 防连点：上一次批处理尚未走完
         actives = []
+        actives_idx = []
         for gi, group in enumerate(self._groups):
             if self._group_excl[gi].isChecked():
                 continue
-            checks = self._checks[gi] if gi < len(self._checks) else []
-            active = [it for it, c in zip(group, checks)
-                      if not c.isChecked()]
+            active = self._collect_active(gi, group)
             if len(active) >= 2:
                 actives.append(active)
+                actives_idx.append(gi)
         if not actives:
             QMessageBox.information(self, "提示",
                                     "没有可处理的组（均被排除或不足 2 张）。")
             return
         n_del = sum(len(a) - 1 for a in actives)
-        if self.controller.online_mode:
-            ans = QMessageBox.question(
-                self, "云端批量删除确认",
-                f"将对 {len(actives)} 组永久删除 {n_del} 张云端重复图片"
-                f"（不可恢复），每组仅保留"
-                f"{'最大' if by == 'size' else '最新'}的一张。继续？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No)
-            if ans != QMessageBox.StandardButton.Yes:
-                return
-        self._busy = True       # 同步批处理期间拒绝再次触发
+        if not self._confirm_online(n_del, by, f"将对 {len(actives)} 组，"):
+            return
+        self._busy = True       # 批处理期间拒绝再次触发
         try:
             self.controller.batch_keep(actives, by)
         finally:
             self._busy = False
+        # 逐组写明结果再关闭，让用户知道都处理了哪些组
+        for gi, active in zip(actives_idx, actives):
+            kept = max(active, key=lambda i: i.size_bytes if by == "size" else i.mtime)
+            self._mark_processed(gi, kept.path.name, len(active) - 1)
         self.accept()
+
+    def _collect_active(self, gi: int, group) -> list:
+        """该组里未被「排除」勾选的项。"""
+        checks = self._checks[gi] if gi < len(self._checks) else []
+        return [it for it, c in zip(group, checks) if not c.isChecked()]
+
+    def _confirm_online(self, n: int, by: str, scope: str) -> bool:
+        """在线模式不可逆删除，统一在这里确认。"""
+        if not self.controller.online_mode:
+            return True
+        ans = QMessageBox.question(
+            self, "云端删除确认",
+            f"将永久删除 {n} 张云端重复图片（不可恢复），\n"
+            f"{scope}仅保留{'最大' if by == 'size' else '最新'}的一张。继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        return ans == QMessageBox.StandardButton.Yes
+
+    def _mark_processed(self, gi: int, kept_name: str, moved: int) -> None:
+        """处理过的组置灰并写明结果。
+
+        此前 _keep 成功后界面毫无变化，用户会再点一次或接着点「一键保留」，
+        对已经在 Remove/ 的文件再移出，产生重复记录和改名，
+        还会让「保留最新」把已移出项也算进去从而选错对象。
+        """
+        if gi < len(self._row_btns):
+            for b in self._row_btns[gi]:
+                b.setEnabled(False)
+        if gi < len(self._row_status):
+            self._row_status[gi].setText(f"已提交：保留 {kept_name}\n移出 {moved} 张")
 
     def _keep(self, gi: int, group, by: str) -> None:
         if self._busy:
             return                      # 防连点：避免同组被重复移出
-        checks = self._checks[gi] if gi < len(self._checks) else []
-        active = [it for it, c in zip(group, checks) if not c.isChecked()]
+        active = self._collect_active(gi, group)
         if len(active) < 2:
             QMessageBox.information(self, "提示",
                                     "排除后该组不足 2 张，无需处理。")
             return
-        if self.controller.online_mode:
-            n = len(active) - 1
-            ans = QMessageBox.question(
-                self, "云端删除确认",
-                f"将永久删除 {n} 张云端重复图片（不可恢复），\n"
-                f"仅保留{'最大' if by == 'size' else '最新'}的一张。继续？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No)
-            if ans != QMessageBox.StandardButton.Yes:
-                return
+        if not self._confirm_online(len(active) - 1, by, ""):
+            return
+        kept = max(active, key=lambda i: i.size_bytes if by == "size" else i.mtime)
         self._busy = True
         try:
             self.controller.keep_one(active, by)
         finally:
             self._busy = False
+        self._mark_processed(gi, kept.path.name, len(active) - 1)

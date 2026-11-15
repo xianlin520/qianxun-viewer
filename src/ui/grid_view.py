@@ -6,14 +6,15 @@ from __future__ import annotations
 
 from PySide6.QtCore import (QAbstractListModel, QModelIndex, QPoint, QRect, QSize,
                             Qt, QTimer, Signal)
-from PySide6.QtGui import QColor, QPainter, QPixmap, QPixmapCache
+from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import QListView, QStyledItemDelegate, QStyle
 
-from ..core import thumbnail
+from .thumb_cache import THUMBS, ScaleMode, tier_for
 from ..utils.format import human_size, human_time
 from .theme import BG_CARD, BG_CARD_HOVER, BG_CARD_SEL, BG_CORRUPTED, BG_PLACEHOLDER, DANGER, DUP, FG_MUTED, FG_SECONDARY, STAR, SUCCESS
 
 ROLE_ITEM = Qt.ItemDataRole.UserRole + 1
+ROLE_INFO = Qt.ItemDataRole.UserRole + 2   # 信息行文案，delegate 只认这个角色
 INFO_H = 24
 PAD = 6
 BUTTON_H = 26
@@ -37,6 +38,11 @@ class ImageModel(QAbstractListModel):
         item = self._items[index.row()]
         if role == ROLE_ITEM:
             return item
+        if role == ROLE_INFO:
+            # 通过角色暴露，delegate 不必知道模型是 ImageModel。
+            # 插一层 QSortFilterProxyModel 做排序/过滤时，index.model()
+            # 会变成代理对象，那里没有 info_text()，绘制会抛 AttributeError。
+            return self.info_text(item)
         if role == Qt.ItemDataRole.ToolTipRole:
             return item.path.name
         return None
@@ -71,11 +77,20 @@ class ThumbDelegate(QStyledItemDelegate):
         self.show_buttons = False   # 分页模式下卡片下方显示功能按钮
         self.trash_mode = False     # 垃圾桶模式下 “移” 换为 “还原”
 
-    def sizeHint(self, option, index) -> QSize:
+    def card_size(self) -> QSize:
+        """卡片尺寸的纯计算版本。
+
+        外部调用方（分页容量、控制器）不该为了问尺寸而伪造 None 参数去调
+        Qt 的虚函数 —— 当前 sizeHint 不读 option/index 才侥幸能跑，
+        一旦有人给它加上 `if option.state & ...`，打开分页视图就 AttributeError。
+        """
         h = self.thumb_size + PAD * 2 + INFO_H
         if self.show_buttons:
             h += BUTTON_H
         return QSize(self.thumb_size + PAD * 2, h)
+
+    def sizeHint(self, option, index) -> QSize:   # noqa: ARG002
+        return self.card_size()
 
     def actions(self) -> list:
         """当前模式下的按钮动作列表。"""
@@ -123,28 +138,11 @@ class ThumbDelegate(QStyledItemDelegate):
             painter.setPen(QColor(DANGER))
             painter.drawText(img_rect, Qt.AlignmentFlag.AlignCenter, "已损坏")
         else:
-            tier = 512 if self.thumb_size > 256 else 256
-            # key 用缓存指纹（含 size/mtime）：外部改了同名图片后能自动失效，
-            # 否则 F5 重建了磁盘缩略图、界面仍命中旧 pixmap
-            key = f"{thumbnail.cache_key(item)}|{tier}"
-            pix = QPixmapCache.find(key)
-            if pix is None or pix.isNull():
-                if self.image_root is not None:
-                    fp = thumbnail.thumb_path(self.image_root, item, tier)
-                    if fp.exists():
-                        pix = QPixmap(str(fp))
-                        if not pix.isNull():
-                            QPixmapCache.insert(key, pix)
-            if pix is not None and not pix.isNull():
-                # 缩放结果按「指纹+档位+目标尺寸」缓存，
-                # 避免每帧对每张可见卡片重做一次 SmoothTransformation
-                skey = f"{key}|{img_rect.width()}x{img_rect.height()}|k"
-                scaled = QPixmapCache.find(skey)
-                if scaled is None or scaled.isNull():
-                    scaled = pix.scaled(img_rect.size(),
-                                        Qt.AspectRatioMode.KeepAspectRatio,
-                                        Qt.TransformationMode.SmoothTransformation)
-                    QPixmapCache.insert(skey, scaled)
+            # 缓存键与缩放规则统一走 ThumbCache，视图不再自己拼键
+            scaled = THUMBS.scaled(self.image_root, item, tier_for(self.thumb_size),
+                                   img_rect.width(), img_rect.height(),
+                                   ScaleMode.FIT)
+            if scaled is not None:
                 x = img_rect.x() + (img_rect.width() - scaled.width()) // 2
                 y = img_rect.y() + (img_rect.height() - scaled.height()) // 2
                 painter.drawPixmap(x, y, scaled)
@@ -181,7 +179,7 @@ class ThumbDelegate(QStyledItemDelegate):
                           r.width() - 4, INFO_H - 4)
         painter.setPen(QColor(FG_SECONDARY))
         fm = painter.fontMetrics()
-        text = fm.elidedText(index.model().info_text(item),
+        text = fm.elidedText(index.data(ROLE_INFO) or "",
                              Qt.TextElideMode.ElideMiddle, info_rect.width())
         painter.drawText(info_rect, Qt.AlignmentFlag.AlignCenter, text)
 
@@ -225,10 +223,18 @@ class GridView(QListView):
         self._debounce.timeout.connect(self._emit_range)
         self.verticalScrollBar().valueChanged.connect(lambda *_: self._debounce.start())
 
+        # 尺寸变化单独防抖。此前 resizeEvent 里既 start 防抖、又立刻
+        # emit geometry_changed，等于拖窗口边缘时每个像素重算一次页容量，
+        # 分页模式下列表跳动、单核打满；图片墙那边是 60ms 防抖，两边手感不一致。
+        self._geo_debounce = QTimer(self)
+        self._geo_debounce.setSingleShot(True)
+        self._geo_debounce.setInterval(50)
+        self._geo_debounce.timeout.connect(self.geometry_changed.emit)
+
     def resizeEvent(self, e) -> None:
         super().resizeEvent(e)
         self._debounce.start()
-        self.geometry_changed.emit()
+        self._geo_debounce.start()
 
     def mousePressEvent(self, e) -> None:
         # 分页模式下卡片功能按钮命中检测
@@ -254,17 +260,31 @@ class GridView(QListView):
         vp = self.viewport().rect()
         first = self.indexAt(vp.topLeft()).row()
         last = self.indexAt(QPoint(vp.left(), max(0, vp.bottom() - 1))).row()
+        # 视图还没完成布局时 indexAt 无命中。此前直接退化成「整个模型可见」，
+        # 于是切换页/首次显示会对全部条目派发缩略图请求，大库下瞬间打满线程池。
+        # 用一页容量做上界，宁可少报一屏也不全量。
         if first < 0:
             first = 0
+            cache_cap = max(1, self.page_capacity())
+        else:
+            cache_cap = None
         if last < 0:
-            last = m.rowCount() - 1
+            cap = cache_cap or max(1, self.page_capacity())
+            last = min(m.rowCount() - 1, first + cap - 1)
         return first, last
 
     def page_capacity(self) -> int:
         d = self.itemDelegate()
         if d is None:
             return 1
-        hint = d.sizeHint(None, None)
+        # 默认 delegate 没有 card_size（只有本文件的 ThumbDelegate 有），
+        # 这里兜一下，避免「换 delegate 后打开分页视图就崩」。
+        size = getattr(d, "card_size", None)
+        if callable(size):
+            hint = size()
+        else:
+            from PySide6.QtWidgets import QStyleOptionViewItem
+            hint = d.sizeHint(QStyleOptionViewItem(), QModelIndex())
         sp = self.spacing()
         vp = self.viewport().size()
         cols = max(1, (vp.width() + sp) // (hint.width() + sp))

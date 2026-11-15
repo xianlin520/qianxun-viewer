@@ -5,8 +5,10 @@
 
 设计要点：
 - 鉴权用预共享密钥 + HMAC-SHA256，与服务端 server/src/auth.js 严格对应：
-      canonical = METHOD \\n PATH \\n TIMESTAMP \\n NONCE \\n hex(SHA256(body))
+      canonical = METHOD \\n PATH?QUERY \\n TIMESTAMP \\n NONCE \\n hex(SHA256(body))
       header X-QX-Signature = hex(HMAC-SHA256(secret, canonical))
+  query 现在也参与签名。此前只签 pathname，被截获的请求可以改 query 重放。
+  服务端为旧客户端保留了只签 path 的兼容分支（ALLOW_LEGACY_SIG），新版一律签全量。
 - 只用标准库（urllib + hmac + hashlib），不引入新依赖。
 - **必须带 User-Agent**：Cloudflare 的 Bot Fight 会把 Python 默认 UA 拦成
   `error code: 1010`（实测）。
@@ -23,13 +25,17 @@ import urllib.error
 import urllib.request
 
 UA = "qx-album/1.0 (+desktop client)"
-TIMEOUT = 20
+# 普通接口 10 秒；健康检查与单条撤销这类轻请求 5 秒。
+# 之前统一 20 秒且都在 UI 线程跑，地址填错时窗口会假死半分钟。
+TIMEOUT = 10
+TIMEOUT_LIGHT = 5
 
 
-def _sign(secret: str, method: str, path: str, body: bytes, nonce: str) -> dict:
+def _sign(secret: str, method: str, target: str, body: bytes, nonce: str) -> dict:
     """生成签名头。
 
     与服务端 auth.js 严格对齐：
+      - target 是「路径 + 查询串」，例如 /api/shares?limit=5
       - GET/HEAD 不参与 body hash（服务端直接跳过）
       - **其它方法（POST/DELETE/…）一律计算 hash，空 body 也要算**
         —— 服务端对空 body 调 arrayBuffer() 得到 0 字节，
@@ -42,7 +48,7 @@ def _sign(secret: str, method: str, path: str, body: bytes, nonce: str) -> dict:
         body_hash = ""
     else:
         body_hash = hashlib.sha256(body or b"").hexdigest()
-    canonical = "\n".join([m, path, ts, nonce, body_hash])
+    canonical = "\n".join([m, target, ts, nonce, body_hash])
     sig = hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
     return {"X-QX-Timestamp": ts, "X-QX-Signature": sig, "X-QX-Nonce": nonce}
 
@@ -54,23 +60,22 @@ class ShareServer:
         self.base = (base or "").rstrip("/")
         self.secret = secret or ""
 
+    def __repr__(self) -> str:  # 便于调试，不暴露密钥
+        return f"<ShareServer base={self.base} secret={'set' if self.secret else 'EMPTY'}>"
+
     # ---------- 底层 ----------
     def configured(self) -> bool:
         return bool(self.base and self.secret)
 
-    def _request(self, method: str, path: str, payload=None):
+    def _request(self, method: str, target: str, payload=None, timeout: float = TIMEOUT):
         """返回 (ok, data)。
 
         ok=False 时 data 是错误描述字符串。
 
-        注意：签名只覆盖**路径**，不含 query。服务端用 `url.pathname` 参与
-        签名计算（server/src/auth.js），若这里带 ?limit=... 就会 401。"""
+        target 含查询串，例如 "/api/shares?limit=200"。签名覆盖完整 target，
+        与请求实际发出的 URL 完全一致（服务端用 pathname + search 复算）。"""
         if not self.configured():
             return False, "未配置分享服务端"
-
-        # 拆分 path 与 query：query 只用于实际请求，不进签名
-        sign_path, _, query = path.partition("?")
-        request_path = path
 
         body = b""
         if payload is not None:
@@ -79,14 +84,14 @@ class ShareServer:
         headers = {"User-Agent": UA, "Accept": "application/json"}
         if body:
             headers["Content-Type"] = "application/json"
-        headers.update(_sign(self.secret, method, sign_path, body,
+        headers.update(_sign(self.secret, method, target, body,
                              secrets.token_hex(8)))
 
         req = urllib.request.Request(
-            self.base + request_path, data=body or None, headers=headers,
+            self.base + target, data=body or None, headers=headers,
             method=method.upper())
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 raw = resp.read()
                 try:
                     return True, json.loads(raw)
@@ -104,38 +109,64 @@ class ShareServer:
             return False, f"{type(exc).__name__}: {exc}"
 
     # ---------- 健康检查 ----------
-    def health(self):
+    def health(self, timeout: float = TIMEOUT_LIGHT):
         try:
             req = urllib.request.Request(
                 self.base + "/health", headers={"User-Agent": UA}, method="GET")
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return True, json.loads(resp.read())
         except Exception as exc:
             return False, f"{type(exc).__name__}: {exc}"
 
     # ---------- 短链 ----------
-    def create_share(self, oss_key: str, note: str = ""):
-        """创建短链，返回 (ok, url) 或 (False, 错误)"""
-        ok, data = self._request(
-            "POST", "/api/shares", {"oss_key": oss_key, "note": note})
+    def create_share(self, oss_key: str, note: str = "", expires_at: int | None = None):
+        """创建短链，返回 (ok, url) 或 (False, 错误)
+
+        expires_at 为毫秒时间戳，None 表示长期有效（与旧版一致）。"""
+        payload = {"oss_key": oss_key, "note": note}
+        if expires_at:
+            payload["expires_at"] = int(expires_at)
+        ok, data = self._request("POST", "/api/shares", payload)
         if not ok:
             return False, data
         if isinstance(data, dict) and data.get("url"):
             return True, data["url"]
         return False, "服务端返回格式异常"
 
-    def list_shares(self, oss_key: str = "", limit: int = 200):
-        q = f"?limit={int(limit)}"
+    def list_shares(self, oss_key: str = "", limit: int = 200, before: int | None = None):
+        """返回 (ok, (items, next_cursor))。"""
+        from urllib.parse import quote
+
+        parts = [f"limit={int(limit)}"]
         if oss_key:
-            from urllib.parse import quote
-            q += f"&oss_key={quote(oss_key, safe='')}"
-        ok, data = self._request("GET", "/api/shares" + q)
+            parts.append(f"oss_key={quote(oss_key, safe='')}")
+        if before:
+            parts.append(f"before={int(before)}")
+        ok, data = self._request("GET", "/api/shares?" + "&".join(parts))
         if not ok:
             return False, data
-        return True, data.get("items", [])
+        return True, (data.get("items", []), data.get("next_cursor"))
+
+    def list_all_shares(self, oss_key: str = "", page: int = 200, max_pages: int = 50):
+        """翻页取全量。用于「撤销全部」这类必须看全的场合。
+
+        此前前端硬编码 limit=500，超过 500 条的记录根本列不出来，
+        确认文案却写「全部」——用户以为撤干净了，实际没有。
+        返回 (ok, items) 或 (ok=False, 错误描述)。"""
+        out = []
+        cursor = None
+        for _ in range(max_pages):
+            ok, res = self.list_shares(oss_key=oss_key, limit=page, before=cursor)
+            if not ok:
+                return False, res
+            items, cursor = res
+            out.extend(items)
+            if not cursor or not items:
+                break
+        return True, out
 
     def revoke(self, token: str):
-        ok, data = self._request("DELETE", f"/api/shares/{token}")
+        ok, data = self._request("DELETE", f"/api/shares/{token}", timeout=TIMEOUT_LIGHT)
         return ok, (data if not ok else True)
 
     def revoke_by_key(self, oss_key: str):

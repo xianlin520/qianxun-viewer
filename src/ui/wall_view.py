@@ -11,22 +11,18 @@ from __future__ import annotations
 import bisect
 
 from PySide6.QtCore import QPoint, QRect, Qt, QEvent, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QPixmap, QPixmapCache
+from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import QAbstractScrollArea
 
 from ..core import thumbnail
+from .input import WHEEL_UNIT, wheel_steps
+from .thumb_cache import THUMBS, ScaleMode, tier_for
 from .theme import ACCENT, BG_APP, BG_CARD_HOVER, BG_CORRUPTED, DANGER, DUP, STAR
 
 
-def _wheel_delta(e) -> int:
-    """统一取滚轮增量。
-
-    鼠标滚轮给 angleDelta（1/8 度）；触控板/高精度设备只有 pixelDelta，
-    angleDelta 为 0。只读 angleDelta 会让触控板完全滚不动（且事件还被吞掉）。"""
-    d = e.angleDelta().y()
-    if d:
-        return d
-    return int(e.pixelDelta().y() * 3)   # 像素量级与角度量级不同，约 3 倍折算
+def _wheel_delta(e) -> float:
+    """滚轮格数。换算规则见 ui/input.py，两个视图共用同一量纲。"""
+    return wheel_steps(e)
 
 
 class WallView(QAbstractScrollArea):
@@ -39,7 +35,6 @@ class WallView(QAbstractScrollArea):
         self._cells: list = []
         self._rows: list[tuple[int, int, int]] = []   # (行顶 y, 首下标, 末下标)
         self._row_tops: list[int] = []                # 行顶列表，供二分
-        self._total_h = 0
         self.row_height = 180
         self.image_root = None
         self._focus = -1
@@ -111,7 +106,8 @@ class WallView(QAbstractScrollArea):
         self._cells = cells
         self._rows = rows
         self._row_tops = [r[0] for r in rows]
-        self._total_h = y
+        # 滚动条范围由下面的 setRange 负责；历史上这里还存过一份 _total_h，
+        # 只写不读，属于遗留字段，已删除。
         sb = self.verticalScrollBar()
         sb.setRange(0, max(0, y - self.viewport().height()))
         sb.setPageStep(max(1, self.viewport().height()))
@@ -179,22 +175,22 @@ class WallView(QAbstractScrollArea):
         self._wheel_scroll(_wheel_delta(e))
         e.accept()
 
-    def _wheel_scroll(self, dy: int) -> None:
-        # 图片墙加速滚动：每格滚轮至少滚动一行高度
-        if not dy:
+    def _wheel_scroll(self, steps: float) -> None:
+        # 图片墙加速滚动：一格滚轮至少滚动一行高度。
+        # 用 round 而非 int 截断：int 向零取整会让小增量变成固定步，
+        # 微调时滚不动、稍大一点又滚过头。
+        if not steps:
             return
-        step = max(120, self.row_height)
+        step = max(WHEEL_UNIT, self.row_height)
         sb = self.verticalScrollBar()
-        sb.setValue(sb.value() - int(dy / 120 * step))
+        sb.setValue(sb.value() - int(round(steps * step)))
 
     def mousePressEvent(self, e) -> None:
         if e.button() == Qt.MouseButton.LeftButton:
             idx = self.index_at(e.position())
             mods = e.modifiers()
             if idx < 0:                      # 点空白清除选择
-                self.selection.clear()
-                self._anchor = None
-                self.update()
+                self._clear_selection()
                 return
             if mods & Qt.KeyboardModifier.ControlModifier:
                 if idx in self.selection:
@@ -218,11 +214,20 @@ class WallView(QAbstractScrollArea):
             return
         if e.button() == Qt.MouseButton.RightButton:
             idx = self.index_at(e.position())
-            if idx >= 0 and idx not in self.selection:
+            if idx < 0:
+                # 右键点空白与左键保持一致。此前什么都不做，
+                # 旧选择仍在，随后的 Del / F 会作用在看不见的选择上。
+                self._clear_selection()
+            elif idx not in self.selection:
                 self.selection = {idx}
                 self._anchor = idx
                 self.update()
         super().mousePressEvent(e)
+
+    def _clear_selection(self) -> None:
+        self.selection.clear()
+        self._anchor = None
+        self.update()
 
     def keyPressEvent(self, e) -> None:
         # 键盘导航：方向键移动焦点并同步选择，Enter 进大图
@@ -257,19 +262,30 @@ class WallView(QAbstractScrollArea):
             self.update()
 
     def _vertical_neighbor(self, idx: int, up: bool) -> int:
+        """上下键找同列最近格。
+
+        原实现遍历全部格子：2 万张图时每按一次方向键就是 2 万次矩形中心计算，
+        按住方向键明显掉帧。index_at 和 paintEvent 都已用二分索引，
+        只有这条路径没跟上。这里用 _row_tops 定位相邻行，只在该行区间内找。
+        """
         cur = self._cells[idx]
-        if cur is None:
+        if cur is None or not self._rows:
             return idx
+        row = max(0, min(bisect.bisect_right(self._row_tops, cur.y()) - 1,
+                         len(self._rows) - 1))
+        target_row = row - 1 if up else row + 1
+        if not (0 <= target_row < len(self._rows)):
+            return idx
+
+        # _rows[k] = (y, 起始下标, 结束下标)
+        start, end = self._rows[target_row][1], self._rows[target_row][2]
         cx = cur.center().x()
         best, best_d = idx, None
-        for i, cell in enumerate(self._cells):
-            if cell is None or i == idx:
+        for i in range(start, min(end + 1, len(self._cells))):
+            cell = self._cells[i]
+            if cell is None:
                 continue
-            if up and cell.y() >= cur.y():
-                continue
-            if not up and cell.y() <= cur.y():
-                continue
-            d = abs(cell.center().x() - cx) + abs(cell.y() - cur.y()) * 0.01
+            d = abs(cell.center().x() - cx)
             if best_d is None or d < best_d:
                 best_d = d
                 best = i
@@ -294,7 +310,7 @@ class WallView(QAbstractScrollArea):
         v = self.verticalScrollBar().value()
         p.translate(0, -v)
         view_top, view_bot = v, v + self.viewport().height()
-        tier = 512 if self.row_height > 256 else 256
+        tier = tier_for(self.row_height)
         # 只遍历可见行（原实现每帧遍历全部 items，2 万张时约 9.5ms 纯循环开销）
         first_row, last_row = self._visible_rows(view_top, view_bot)
         if last_row < first_row:
@@ -312,34 +328,20 @@ class WallView(QAbstractScrollArea):
                 p.setPen(QColor(DANGER))
                 p.drawText(cell, Qt.AlignmentFlag.AlignCenter, "已损坏")
             else:
-                # 已按目标像素裁好缓存：命中则直接贴图，
-                # 避免每帧对每个可见格重复做一次 SmoothTransformation
-                ck = thumbnail.cache_key(item)
-                skey = f"{ck}|{tier}|{cell.width()}x{cell.height()}|c"
-                scaled = QPixmapCache.find(skey)
-                if scaled is None or scaled.isNull():
-                    key = f"{ck}|{tier}"
-                    pix = QPixmapCache.find(key)
-                    if pix is None or pix.isNull():
-                        if self.image_root is not None:
-                            fp = thumbnail.thumb_path(self.image_root, item, tier)
-                            if fp.exists():
-                                pix = QPixmap(str(fp))
-                                if not pix.isNull():
-                                    QPixmapCache.insert(key, pix)
-                    if pix is not None and not pix.isNull():
-                        scaled = pix.scaled(
-                            cell.size(),
-                            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                            Qt.TransformationMode.SmoothTransformation)
-                        QPixmapCache.insert(skey, scaled)
-                if scaled is not None and not scaled.isNull():
+                # 缓存键与缩放规则统一走 ThumbCache，视图不再自己拼键
+                scaled = THUMBS.scaled(self.image_root, item, tier,
+                                       cell.width(), cell.height(),
+                                       ScaleMode.COVER)
+                if scaled is not None:
                     sx = (scaled.width() - cell.width()) // 2
                     sy = (scaled.height() - cell.height()) // 2
                     p.drawPixmap(cell, scaled, QRect(sx, sy, cell.width(), cell.height()))
                 else:
                     p.fillRect(cell, QColor(BG_CARD_HOVER))
             if item.favorite:
+                # 每个细节块单独 save/restore：星标把字体改成 15px 粗体后
+                # 不还原，「已损坏」会以 15px 粗体绘制，与相邻格 13px 常规字混排
+                p.save()
                 f = p.font()
                 f.setBold(True)
                 f.setPixelSize(15)
@@ -347,7 +349,9 @@ class WallView(QAbstractScrollArea):
                 p.setPen(QColor(STAR))
                 p.drawText(QRect(cell.x() + 4, cell.y() + 2, 20, 20),
                            Qt.AlignmentFlag.AlignCenter, "★")
+                p.restore()
             if item.dup_group >= 0:
+                p.save()
                 p.setBrush(QColor(DUP))
                 p.setPen(Qt.PenStyle.NoPen)
                 badge = QRect(cell.right() - 20, cell.y() + 4, 16, 16)
@@ -358,6 +362,7 @@ class WallView(QAbstractScrollArea):
                 f.setPixelSize(10)
                 p.setFont(f)
                 p.drawText(badge, Qt.AlignmentFlag.AlignCenter, "重")
+                p.restore()
             if idx == self._focus:
                 pen = p.pen()
                 p.setPen(QColor(ACCENT))

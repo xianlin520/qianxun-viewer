@@ -5,15 +5,21 @@
 
 所有网络请求都在后台线程执行 —— 之前版本在 UI 线程同步循环调用，
 选中 11 条撤销会让窗口「未响应」数秒（实测 CF 单次往返 300~1000ms）。
+
+列表走服务端游标翻页取全量。此前硬编码 limit=500，
+超过 500 条的记录根本列不出来，「撤销全部」的确认文案却写「全部」，
+用户以为撤干净了实际没有。
 """
 from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QAbstractItemView, QDialog, QHBoxLayout,
                                QHeaderView, QLabel, QMessageBox, QPushButton,
                                QTableWidget, QTableWidgetItem, QVBoxLayout)
+
+from .async_call import AsyncCaller
 
 
 def _fmt_time(ms) -> str:
@@ -23,28 +29,6 @@ def _fmt_time(ms) -> str:
         return datetime.fromtimestamp(int(ms) / 1000).strftime("%m-%d %H:%M")
     except (ValueError, OSError, OverflowError):
         return "—"
-
-
-class _WorkerSignals(QObject):
-    done = Signal(object)          # 任意结果（list / dict / True）
-    failed = Signal(str)
-
-
-class _Worker(QRunnable):
-    """把任意阻塞调用丢到后台线程。fn 的返回值通过 done 信号回传。"""
-
-    def __init__(self, fn):
-        super().__init__()
-        self.fn = fn
-        self.signals = _WorkerSignals()
-
-    def run(self):
-        try:
-            result = self.fn()
-        except Exception as exc:                      # noqa: BLE001
-            self.signals.failed.emit(f"{type(exc).__name__}: {exc}")
-            return
-        self.signals.done.emit(result)
 
 
 class SharesDialog(QDialog):
@@ -58,10 +42,9 @@ class SharesDialog(QDialog):
         self.resize(940, 520)
         self.controller = controller
         self._rows: list[dict] = []
-        self._pool = QThreadPool(self)
-        self._pool.setMaxThreadCount(1)     # 串行，避免并发打满
+        # 串行执行，避免连点刷新把并发打满
+        self._async = AsyncCaller(self, max_threads=1)
         self._busy = False
-        self._workers: list = []            # 保活，防止运行中被 GC
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 10, 10, 10)
@@ -109,28 +92,23 @@ class SharesDialog(QDialog):
         if busy_text:
             self.lbl_summary.setText(busy_text)
         self._set_buttons(False)
-        w = _Worker(fn)
-        w.signals.done.connect(lambda r: self._finish(on_done, r))
-        w.signals.failed.connect(
-            lambda msg: self._finish_failed(on_fail, msg))
-        self._workers.append(w)
-        self._pool.start(w)
 
-    def _finish(self, on_done, result) -> None:
-        self._set_buttons(True)
-        self._workers.clear()       # 该 worker 已回调完成，可释放
-        try:
-            on_done(result)
-        except Exception as exc:                      # noqa: BLE001
-            self.lbl_summary.setText(f"处理结果出错：{type(exc).__name__}: {exc}")
+        def done(result):
+            self._set_buttons(True)
+            try:
+                on_done(result)
+            except Exception as exc:                  # noqa: BLE001
+                self.lbl_summary.setText(
+                    f"处理结果出错：{type(exc).__name__}: {exc}")
 
-    def _finish_failed(self, on_fail, msg: str) -> None:
-        self._set_buttons(True)
-        self._workers.clear()
-        if on_fail is not None:
-            on_fail(msg)
-        else:
-            self.lbl_summary.setText(f"操作失败：{msg}")
+        def failed(msg: str):
+            self._set_buttons(True)
+            if on_fail is not None:
+                on_fail(msg)
+            else:
+                self.lbl_summary.setText(f"操作失败：{msg}")
+
+        self._async.run(fn, on_done=done, on_fail=failed)
 
     def _set_buttons(self, enabled: bool) -> None:
         for b in (self.btn_refresh, self.btn_copy, self.btn_revoke,
@@ -145,19 +123,21 @@ class SharesDialog(QDialog):
             self.table.setRowCount(0)
             return
         self._run(
-            lambda: srv.list_shares(limit=500),
+            srv.list_all_shares,
             self._on_listed,
             busy_text="正在加载…",
             on_fail=lambda m: self.lbl_summary.setText(f"加载失败：{m}"),
         )
 
     def _on_listed(self, result) -> None:
-        ok, items = result
+        ok, payload = result
         if not ok:
-            self.lbl_summary.setText(f"加载失败：{items}")
+            self.lbl_summary.setText(f"加载失败：{payload}")
             return
+        items = payload or []
         self._rows = items
-        active = sum(1 for it in items if not it.get("revoked"))
+        active = sum(1 for it in items if not it.get("revoked")
+                     and not it.get("expired"))
         total_hits = sum(it.get("hits") or 0 for it in items)
         self.lbl_summary.setText(
             f"共 {len(items)} 条，其中有效 {active} 条 · 累计访问 {total_hits} 次")
@@ -169,17 +149,24 @@ class SharesDialog(QDialog):
             oss_key = it.get("oss_key") or ""
             name = oss_key.rsplit("/", 1)[-1]
             revoked = bool(it.get("revoked"))
+            expired = bool(it.get("expired"))
+            if revoked:
+                state = "已撤销"
+            elif expired:
+                state = "已过期"
+            else:
+                state = "有效"
             cells = [
                 _fmt_time(it.get("created_at")),
                 name,
                 it.get("url") or "",
                 str(it.get("hits") or 0),
                 _fmt_time(it.get("last_hit")),
-                "已撤销" if revoked else "有效",
+                state,
             ]
             for c, text in enumerate(cells):
                 cell = QTableWidgetItem(text)
-                if revoked:
+                if revoked or expired:
                     cell.setForeground(Qt.GlobalColor.gray)
                 if c == 3:
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -195,18 +182,49 @@ class SharesDialog(QDialog):
         if not sel:
             QMessageBox.information(self, "提示", "请先选中记录。")
             return
-        usable = [it for it in sel if not it.get("revoked")]
+        usable = [it for it in sel
+                  if not it.get("revoked") and not it.get("expired")]
         if not usable:
             QMessageBox.information(
-                self, "提示", "选中的链接都已撤销，复制出去也无法访问。")
+                self, "提示", "选中的链接都已撤销或已过期，复制出去也无法访问。")
             return
         from PySide6.QtWidgets import QApplication
         text = "\n".join(it["url"] for it in usable)
         QApplication.clipboard().setText(text)
         self.lbl_summary.setText(f"已复制 {len(usable)} 条链接到剪贴板")
 
+    @staticmethod
+    def _revoke_many(srv, tokens: list[str]):
+        """逐条撤销，单条异常不影响整体计数。
+
+        原先 `ok, _ = srv.revoke(t)` 没有 try，任一条抛异常就跳出循环，
+        用户只看到「操作失败: TimeoutError」，不知道实际撤销了几条、
+        还差几条；改用「撤销全部」重试时会对已撤销项再撤一次并得到 410，
+        摘要里出现假的「N 条失败」。
+        """
+        done = failed = 0
+        first_error = ""
+        for t in tokens:
+            try:
+                ok, info = srv.revoke(t)
+            except Exception as exc:                  # noqa: BLE001
+                ok, info = False, f"{type(exc).__name__}: {exc}"
+            if ok:
+                done += 1
+            else:
+                # 410 / not_found 表示这条本来就没了，不算失败
+                text = str(info)
+                if "410" in text or "not_found" in text:
+                    done += 1
+                else:
+                    failed += 1
+                    if not first_error:
+                        first_error = text
+        return done, failed, first_error
+
     def _revoke_selected(self) -> None:
-        sel = [it for it in self._selected() if not it.get("revoked")]
+        sel = [it for it in self._selected()
+               if not it.get("revoked") and not it.get("expired")]
         if not sel:
             QMessageBox.information(self, "提示", "没有可撤销的有效链接。")
             return
@@ -222,20 +240,15 @@ class SharesDialog(QDialog):
         if srv is None:
             return
         tokens = [it["token"] for it in sel]
-
-        def work():
-            done = failed = 0
-            for t in tokens:
-                ok, _ = srv.revoke(t)
-                done += 1 if ok else 0
-                failed += 0 if ok else 1
-            return (done, failed)
-
-        self._run(work, self._on_revoked,
-                  busy_text=f"正在撤销 {len(tokens)} 条…")
+        self._run(
+            lambda: self._revoke_many(srv, tokens),
+            self._on_revoked,
+            busy_text=f"正在撤销 {len(tokens)} 条…",
+        )
 
     def _revoke_all(self) -> None:
-        active = [it for it in self._rows if not it.get("revoked")]
+        active = [it for it in self._rows
+                  if not it.get("revoked") and not it.get("expired")]
         if not active:
             QMessageBox.information(self, "提示", "当前没有有效链接。")
             return
@@ -251,19 +264,18 @@ class SharesDialog(QDialog):
         if srv is None:
             return
         tokens = [it["token"] for it in active]
-
-        def work():
-            done = 0
-            for t in tokens:
-                ok, _ = srv.revoke(t)
-                done += 1 if ok else 0
-            return (done, len(tokens) - done)
-
-        self._run(work, self._on_revoked,
-                  busy_text=f"正在撤销全部 {len(tokens)} 条…")
+        self._run(
+            lambda: self._revoke_many(srv, tokens),
+            self._on_revoked,
+            busy_text=f"正在撤销全部 {len(tokens)} 条…",
+        )
 
     def _on_revoked(self, result) -> None:
-        done, failed = result
-        self.lbl_summary.setText(
-            f"已撤销 {done} 条" + (f"，{failed} 条失败" if failed else ""))
+        done, failed, first_error = result
+        text = f"已撤销 {done} 条"
+        if failed:
+            text += f"，{failed} 条失败"
+            if first_error:
+                text += f"（{first_error}）"
+        self.lbl_summary.setText(text)
         self.reload()

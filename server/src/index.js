@@ -2,16 +2,18 @@
  * 千寻影集服务端入口。
  *
  * 路由：
- *   GET    /s/<token>                公开：图片代理（内联展示）
+ *   GET    /s/<token>                公开：看图页（带后缀则代理图片字节）
  *   GET    /health                   公开：健康检查
  *   POST   /api/shares               创建短链
- *   GET    /api/shares               列出分享记录
+ *   GET    /api/shares               列出分享记录（游标翻页）
  *   DELETE /api/shares/<token>       撤销单条
  *   POST   /api/shares/revoke-by-key 按图片批量撤销
  *   POST   /api/favorites            推送收藏（LWW）
- *   GET    /api/favorites            拉取收藏
+ *   GET    /api/favorites            拉取收藏（游标翻页）
  *
  * 鉴权：除 /s/* 与 /health 外，均需 X-QX-Timestamp + X-QX-Signature。
+ *
+ * 路由表驱动：新增接口只需在 ROUTES 里加一项，不用在三个地方各改一遍。
  */
 
 import { verifyRequest } from "./auth.js";
@@ -21,8 +23,9 @@ import {
   listShares,
   revokeShare,
   revokeByKey,
+  parseShortPath,
 } from "./shares.js";
-import { pushFavorites, pullFavorites } from "./favorites.js";
+import { pushFavorites, pullFavorites, ValidationError } from "./favorites.js";
 
 function json(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
@@ -30,6 +33,7 @@ function json(data, status = 200, extraHeaders = {}) {
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
       ...extraHeaders,
     },
   });
@@ -39,46 +43,187 @@ function err(status, code, message) {
   return json({ ok: false, error: code, message }, status);
 }
 
+/** 统一读 JSON 体；解析失败直接给出 400 响应 */
+async function readJson(request) {
+  try {
+    return { ok: true, body: await request.json() };
+  } catch {
+    return { ok: false, response: err(400, "bad_json", "请求体不是合法 JSON") };
+  }
+}
+
+function requireOssKey(body) {
+  const ossKey = String(body?.oss_key || "").trim();
+  if (!ossKey) return { ok: false, response: err(400, "missing_oss_key", "缺少 oss_key") };
+  return { ok: true, ossKey };
+}
+
+/** 条数上限夹取，避免 ?limit=999999 直接打到 D1 */
+function clampLimit(raw, fallback, max) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(Math.trunc(n), max);
+}
+
+// ---- 各接口实现 ----
+
+async function postShare(request, env) {
+  const r = await readJson(request);
+  if (!r.ok) return r.response;
+  const k = requireOssKey(r.body);
+  if (!k.ok) return k.response;
+
+  const created = await createShare(env, {
+    ossKey: k.ossKey,
+    bucket: r.body.bucket || env.OSS_BUCKET,
+    note: r.body.note,
+    expiresAt: Number(r.body.expires_at),
+  });
+  return json(
+    { ok: true, token: created.token, url: created.url, expires_at: created.expiresAt },
+    201,
+  );
+}
+
+async function getShares(request, env, url) {
+  const r = await listShares(env, {
+    ossKey: url.searchParams.get("oss_key") || undefined,
+    limit: clampLimit(url.searchParams.get("limit"), 200, 200),
+    includeRevoked: url.searchParams.get("include_revoked") !== "0",
+    before: Number(url.searchParams.get("before")),
+  });
+  return json({
+    ok: true,
+    count: r.items.length,
+    items: r.items,
+    next_cursor: r.nextCursor,
+  });
+}
+
+async function deleteShare(request, env, url) {
+  const token = url.pathname.slice("/api/shares/".length).split("/")[0];
+  if (!token) return err(400, "missing_token", "缺少 token");
+  const changed = await revokeShare(env, token);
+  if (!changed) {
+    return json({ ok: false, error: "not_found_or_already_revoked" }, 404);
+  }
+  return json({ ok: true, token, revoked: true });
+}
+
+async function postRevokeByKey(request, env) {
+  const r = await readJson(request);
+  if (!r.ok) return r.response;
+  const k = requireOssKey(r.body);
+  if (!k.ok) return k.response;
+  const n = await revokeByKey(env, k.ossKey);
+  return json({ ok: true, oss_key: k.ossKey, revoked: n });
+}
+
+async function postFavorites(request, env) {
+  const r = await readJson(request);
+  if (!r.ok) return r.response;
+  const items = Array.isArray(r.body?.items) ? r.body.items : [];
+  if (!items.length) return err(400, "empty_items", "items 不能为空");
+
+  try {
+    const result = await pushFavorites(env, items);
+    return json({ ok: true, ...result });
+  } catch (e) {
+    if (e instanceof ValidationError) {
+      // 整批拒绝，不做部分写入：脏数据一旦落库，LWW 会让它永久胜出
+      return err(400, "invalid_item", `第 ${e.index + 1} 条不合法：${e.message}`);
+    }
+    throw e;
+  }
+}
+
+async function getFavorites(request, env, url) {
+  const r = await pullFavorites(env, {
+    since: url.searchParams.get("since"),
+    after: url.searchParams.get("after"),
+    limit: clampLimit(url.searchParams.get("limit"), 1000, 1000),
+  });
+  return json({
+    ok: true,
+    count: r.items.length,
+    items: r.items,
+    next_cursor: r.nextCursor,
+  });
+}
+
+/** 路由表：exact 优先于 prefix，同 method 内按数组顺序匹配 */
+const ROUTES = [
+  { method: "POST", exact: "/api/shares", handler: postShare },
+  { method: "GET", exact: "/api/shares", handler: getShares },
+  { method: "POST", exact: "/api/shares/revoke-by-key", handler: postRevokeByKey },
+  { method: "DELETE", prefix: "/api/shares/", handler: deleteShare },
+  { method: "POST", exact: "/api/favorites", handler: postFavorites },
+  { method: "GET", exact: "/api/favorites", handler: getFavorites },
+];
+
+function matchRoute(method, path) {
+  let prefixHit = null;
+  for (const r of ROUTES) {
+    if (r.method !== method) continue;
+    if (r.exact && r.exact === path) return r;
+    if (r.prefix && !prefixHit && path.startsWith(r.prefix)) prefixHit = r;
+  }
+  return prefixHit;
+}
+
+function health(env, url) {
+  return env.DB.prepare("SELECT 1")
+    .first()
+    .then(() => true)
+    .catch((e) => {
+      console.error("db health failed", String(e));
+      return false;
+    })
+    .then((dbOk) =>
+      json(
+        {
+          ok: dbOk,
+          service: "qx-album-server",
+          time: new Date().toISOString(),
+          db: dbOk ? "up" : "down",
+          // 诊断：只报「有没有」和生效值，绝不回显密钥本身
+          env: {
+            QX_SHARED_SECRET: env.QX_SHARED_SECRET ? "set" : "MISSING",
+            OSS_AK_ID: env.OSS_AK_ID ? "set" : "MISSING",
+            OSS_AK_SECRET: env.OSS_AK_SECRET ? "set" : "MISSING",
+            DB: env.DB ? "bound" : "MISSING",
+            PUBLIC_BASE: env.PUBLIC_BASE || "MISSING",
+            AUTH_WINDOW: effectiveWindow(env),
+            ALLOW_LEGACY_SIG: String(env.ALLOW_LEGACY_SIG ?? "1") !== "0",
+          },
+        },
+        dbOk ? 200 : 503,
+      ),
+    );
+}
+
+/** 与 auth.js 同一个口径：非法值退回 300，上限 3600 */
+function effectiveWindow(env) {
+  const raw = Number(env.AUTH_WINDOW);
+  if (!Number.isFinite(raw) || raw <= 0) return 300;
+  return Math.min(raw, 3600);
+}
+
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method.toUpperCase();
 
     // ---- 公开路由 ----
-    // 支持两种写法：
-    //   /s/<token>          看图页（默认）
-    //   /s/<token>.<ext>    代理图片，后缀用于让链接看起来像图片（如 .jpg）
-    // 后缀本身不参与鉴权，只影响响应与下载文件名。
+    // /s/<token> 与 /s/<token>.<ext> 都走同一入口，后缀由 parseShortPath 判定
     if (method === "GET" && path.startsWith("/s/")) {
-      const seg = path.slice(3).split("/")[0];
-      const dot = seg.lastIndexOf(".");
-      const token = dot > 0 ? seg.slice(0, dot) : seg;
+      const { token } = parseShortPath(path);
       return handleShortLink(request, env, token);
     }
 
     if (method === "GET" && path === "/health") {
-      let dbOk = false;
-      try {
-        await env.DB.prepare("SELECT 1").first();
-        dbOk = true;
-      } catch (e) {
-        console.error("db health failed", String(e));
-      }
-      // 诊断：只报「有没有」，绝不回显值
-      return json({
-        ok: dbOk,
-        service: "qx-album-server",
-        time: new Date().toISOString(),
-        db: dbOk ? "up" : "down",
-        env: {
-          QX_SHARED_SECRET: env.QX_SHARED_SECRET ? "set" : "MISSING",
-          OSS_AK_ID: env.OSS_AK_ID ? "set" : "MISSING",
-          OSS_AK_SECRET: env.OSS_AK_SECRET ? "set" : "MISSING",
-          DB: env.DB ? "bound" : "MISSING",
-          PUBLIC_BASE: env.PUBLIC_BASE || "MISSING",
-        },
-      }, dbOk ? 200 : 503);
+      return health(env, url);
     }
 
     // ---- 以下全部需要鉴权 ----
@@ -87,77 +232,10 @@ export default {
       return err(auth.status === 500 ? 500 : 401, auth.error, "签名校验未通过");
     }
 
-    // ---- /api/shares ----
-    if (path === "/api/shares" && method === "POST") {
-      let body;
-      try {
-        body = await request.json();
-      } catch {
-        return err(400, "bad_json", "请求体不是合法 JSON");
-      }
-      const ossKey = (body.oss_key || "").trim();
-      if (!ossKey) return err(400, "missing_oss_key", "缺少 oss_key");
-
-      const r = await createShare(env, {
-        ossKey,
-        bucket: body.bucket || env.OSS_BUCKET,
-        note: body.note,
-      });
-      return json({ ok: true, token: r.token, url: r.url }, 201);
+    const route = matchRoute(method, path);
+    if (!route) {
+      return err(404, "not_found", `没有这个接口：${method} ${path}`);
     }
-
-    if (path === "/api/shares" && method === "GET") {
-      const rows = await listShares(env, {
-        ossKey: url.searchParams.get("oss_key") || undefined,
-        limit: url.searchParams.get("limit") || 200,
-        includeRevoked: url.searchParams.get("include_revoked") !== "0",
-      });
-      return json({ ok: true, count: rows.length, items: rows });
-    }
-
-    if (path.startsWith("/api/shares/") && method === "DELETE") {
-      const token = path.slice("/api/shares/".length).split("/")[0];
-      if (!token) return err(400, "missing_token", "缺少 token");
-      const changed = await revokeShare(env, token);
-      if (!changed) {
-        return json({ ok: false, error: "not_found_or_already_revoked" }, 404);
-      }
-      return json({ ok: true, token, revoked: true });
-    }
-
-    if (path === "/api/shares/revoke-by-key" && method === "POST") {
-      let body;
-      try {
-        body = await request.json();
-      } catch {
-        return err(400, "bad_json", "请求体不是合法 JSON");
-      }
-      const ossKey = (body.oss_key || "").trim();
-      if (!ossKey) return err(400, "missing_oss_key", "缺少 oss_key");
-      const n = await revokeByKey(env, ossKey);
-      return json({ ok: true, oss_key: ossKey, revoked: n });
-    }
-
-    // ---- /api/favorites ----
-    if (path === "/api/favorites" && method === "POST") {
-      let body;
-      try {
-        body = await request.json();
-      } catch {
-        return err(400, "bad_json", "请求体不是合法 JSON");
-      }
-      const items = Array.isArray(body.items) ? body.items : [];
-      if (!items.length) return err(400, "empty_items", "items 不能为空");
-      const r = await pushFavorites(env, items);
-      return json({ ok: true, ...r });
-    }
-
-    if (path === "/api/favorites" && method === "GET") {
-      const since = url.searchParams.get("since");
-      const items = await pullFavorites(env, { since });
-      return json({ ok: true, count: items.length, items });
-    }
-
-    return err(404, "not_found", `没有这个接口：${method} ${path}`);
+    return route.handler(request, env, url);
   },
 };

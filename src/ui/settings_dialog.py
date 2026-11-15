@@ -4,6 +4,8 @@
 """设置对话框：默认读取目录 / 默认保存目录。"""
 from __future__ import annotations
 
+from .async_call import AsyncCaller
+
 from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox,
                                QFileDialog, QFormLayout, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QSpinBox, QWidget)
@@ -70,6 +72,7 @@ class SettingsDialog(QDialog):
 
         row_srv = QHBoxLayout()
         btn_test_srv = QPushButton("测试服务端连接")
+        self.btn_test_srv = btn_test_srv
         btn_test_srv.clicked.connect(self._test_server)
         row_srv.addWidget(btn_test_srv)
         row_srv.addStretch(1)
@@ -102,27 +105,56 @@ class SettingsDialog(QDialog):
             edit.setText(d)
 
     def _test_server(self) -> None:
-        """测服务端连通性（先 /health，再用密钥签一个只读请求）。"""
+        """测服务端连通性（先 /health，再用密钥签一个只读请求）。
+
+        请求全部放后台线程。此前在模态框的槽函数里同步发请求，
+        地址填错或不可达时窗口冻结 20~60 秒，Windows 标「未响应」，
+        用户连取消都点不动。
+        """
         base = self.edit_srv.text().strip().rstrip("/")
         sec = self.edit_srv_secret.text().strip()
         if not base:
             self.lbl_srv.setText("请先填写服务端地址")
             return
+
         from ..core.share_server import ShareServer
         srv = ShareServer(base, sec)
-        ok, data = srv.health()
-        if not ok:
-            self.lbl_srv.setText(f"连接失败：{data}")
+
+        def job():
+            ok, data = srv.health()
+            if not ok:
+                return {"stage": "health", "ok": False, "err": data}
+            if not sec:
+                return {"stage": "health", "ok": True, "data": data, "no_secret": True}
+            ok2, res = srv.list_shares(limit=1)
+            if not ok2:
+                return {"stage": "auth", "ok": False, "err": res}
+            items = res[0] if isinstance(res, tuple) else res
+            return {"stage": "auth", "ok": True, "data": data, "count": len(items)}
+
+        if getattr(self, "_srv_async", None) is None:
+            self._srv_async = AsyncCaller(self)
+        self.btn_test_srv.setEnabled(False)
+        self.lbl_srv.setText("正在连接…")
+        self._srv_async.run(job, on_done=self._on_server_tested,
+                            on_fail=self._on_server_test_failed)
+
+    def _on_server_test_failed(self, message: str) -> None:
+        self.btn_test_srv.setEnabled(True)
+        self.lbl_srv.setText(f"连接失败：{message}")
+
+    def _on_server_tested(self, result) -> None:
+        self.btn_test_srv.setEnabled(True)
+        if not result["ok"]:
+            prefix = "连接失败" if result["stage"] == "health" else "服务端可达，但鉴权失败"
+            self.lbl_srv.setText(f"{prefix}：{result['err']}")
             return
-        if not sec:
+        data = result.get("data") or {}
+        if result.get("no_secret"):
             self.lbl_srv.setText("服务端可达，但未填密钥（无法调用接口）")
             return
-        ok2, res = srv.list_shares(limit=1)
-        if ok2:
-            self.lbl_srv.setText(
-                f"连接成功：DB {data.get('db', '?')}，鉴权通过，现有 {len(res)} 条分享")
-        else:
-            self.lbl_srv.setText(f"服务端可达，但鉴权失败：{res}")
+        self.lbl_srv.setText(
+            f"连接成功：DB {data.get('db', '?')}，鉴权通过，现有 {result['count']} 条分享")
 
     def accept(self) -> None:
         self.settings.default_open_dir = self.edit_open.text().strip()

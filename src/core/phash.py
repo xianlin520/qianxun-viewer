@@ -54,7 +54,3 @@ def phash_hex(image: Image.Image) -> str:
 def hex_to_int(h: str) -> int:
     return int(h, 16)
 
-
-def hamming(a: str, b: str) -> int:
-    """两个 pHash hex 的汉明距离。"""
-    return bin(hex_to_int(a) ^ hex_to_int(b)).count("1")

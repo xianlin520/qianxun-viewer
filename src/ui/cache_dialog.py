@@ -35,22 +35,30 @@ class CacheDialog(QDialog):
         btn_close.clicked.connect(self.accept)
         self._refresh()
 
-    def _refresh(self) -> None:
+    def _refresh(self, extra: str = "") -> None:
+        """统一刷新文案。
+
+        原实现在按钮槽里用 `self.label.setText(self.label.text() + ...)` 追加，
+        连点两次「清理孤儿缓存」提示就叠成两行重复文案，也取不到干净数值。
+        现在状态只在 _refresh 里写一次，附加说明作为参数传入。
+        """
         n, b = self.controller.cache_info()
         root = self.controller.cache_root
         loc = thumbnail.cache_root_for(root) if root else "—"
         on, ob = self.controller.originals_info()
-        self.label.setText(f"本地缓存目录：{loc}\n"
-                           f"缩略图：{n} 个文件 · 占用 {human_size(b)}\n"
-                           f"在线原图临时缓存：{on} 个文件 · 占用 {human_size(ob)}"
-                           f"（上限 2 GB，超出自动淘汰）\n"
-                           f"（缓存不写入图片目录，云同步不产生流量）")
+        text = (f"本地缓存目录：{loc}\n"
+                f"缩略图：{n} 个文件 · 占用 {human_size(b)}\n"
+                f"在线原图临时缓存：{on} 个文件 · 占用 {human_size(ob)}"
+                f"（上限 2 GB，超出自动淘汰）\n"
+                f"（缓存不写入图片目录，云同步不产生流量）")
+        if extra:
+            text += "\n" + extra
+        self.label.setText(text)
 
     def _clean_orphans(self) -> None:
         n, _b = self.controller.cache_info()
         if n == 0:
-            self._refresh()
-            self.label.setText(self.label.text() + "\n缓存为空，无需清理。")
+            self._refresh(extra="缓存为空，无需清理。")
             return
         ans = QMessageBox.question(
             self, "清理孤儿缓存",
@@ -63,8 +71,7 @@ class CacheDialog(QDialog):
         removed = self.controller.clean_cache_orphans()
         QPixmapCache.clear()
         self.controller.wall_update.emit()
-        self._refresh()
-        self.label.setText(self.label.text() + f"\n已清理孤儿缓存 {removed} 个。")
+        self._refresh(extra=f"已清理孤儿缓存 {removed} 个。")
 
     def _clean_all(self) -> None:
         n, b = self.controller.cache_info()
@@ -79,5 +86,4 @@ class CacheDialog(QDialog):
         self.controller.clean_cache_all()
         QPixmapCache.clear()
         self.controller.wall_update.emit()
-        self._refresh()
-        self.label.setText(self.label.text() + "\n已清空全部缓存，浏览时将自动重建。")
+        self._refresh(extra="已清空全部缓存，浏览时将自动重建。")

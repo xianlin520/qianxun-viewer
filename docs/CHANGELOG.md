@@ -3,6 +3,112 @@
 本文件记录千寻影集（QianXun Album）的重要变更。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)，版本号遵循语义化版本。
 
+## [1.6.5] - 2026-11-15
+
+按 Brooks-Lint 全量审查报告（`docs/REVIEW_BROOKS_2026-11-15.md`）修完 P1 与安全项。
+本轮重点是**把已经验证有效的做法横向铺开**：后台执行器、缓存门面、防抖，此前都只在
+一个文件里生效。
+
+### 安全
+
+- **修复看图页存储型 XSS**：`viewerPage()` 曾把 `oss_key` 的 basename 直接拼进
+  400 行 HTML 模板（`<title>`、`.name`、`alt` 三处）。对象名写成
+  `x.png" onerror="alert(1)` 即可在分享域名上执行脚本。现在：
+  - HTML 移到 `server/src/viewer.html`，`viewerPage()` 只做「取值 → 转义 → 替换」；
+  - 新增 `server/src/html.js`：`escapeHtml / escapeAttr / jsonLiteral / safeExt`；
+  - 内联脚本改用 CSP nonce，注入的 `<script>` 无法执行；
+  - `errorPage()` 一并转义（此前安全纯属参数都是字面量的巧合）。
+- **图片代理不再透传上游 Content-Type**：只按本地白名单推断，其余走
+  `application/octet-stream`，并补 `X-Content-Type-Options: nosniff`。
+  此前客户端直连 OSS 写桶，任一使用者上传 `Content-Type: text/html` 的对象即可同源渲染 HTML。
+- **收藏推送整批校验**：`key` 必须是非空字符串、`updated_at` 必须是正数，
+  非法条目返回 400 且不写入。此前 `Number(x) || Date.now()` 的兜底会把缺字段
+  替换成「当前毫秒」，而 LWW 只接受更大的时间戳 —— 一次错误推送就能把云端记录
+  永久盖章成未来时间，真实数据再也覆盖不回来。
+
+### 修复
+
+- **上传前列举失败不再当成「云端为空」**：`list_keys()` 改为失败即抛，
+  `create_upload_worker` 捕获后中止上传并提示。此前网络抖动或权限不足会让
+  全库被判为未上传，进而整库重传并覆盖同名对象。
+- **启动后的更新检测移出 UI 线程**：Gitee 慢或被拦时，此前会在启动 3 秒后
+  无响应最长 12 秒。改为后台执行，回调再弹窗。
+- **「测试连接」移出 UI 线程**：设置页与服务端、OSS 配置两处，地址填错时
+  模态框会冻结 20~60 秒、Windows 标「未响应」，连取消都点不动。
+- **批量移出只刷新一次**：`move_many()` 收敛完成事件，整批结束才 `refresh_view()`。
+  此前一次「每组保留最大」处理 500 张重复图会触发 500 次全表过滤 + 模型 reset。
+- **查重聚类改分带索引**：4×16bit 倒排 + 鸽巢原理，2 万张全不同图的聚类
+  从数分钟降到 0.9 秒（实测），并支持中途取消。结果与暴力法逐项比对一致
+  （50 组随机样本）。
+- **收藏相对路径不再逐项 resolve**：根目录只 resolve 一次并缓存结果，
+  千张库扫描省掉约 2000 次 `realpath`。
+- **缩略图缓存根目录记忆化**：`cache_root_for` 加 `lru_cache`，
+  同一次操作不再对同一目录反复 resolve + sha1。
+- **`page_capacity()` 换 delegate 后崩溃**：改用 `card_size()`，并对非自定义
+  delegate 兜底。
+- **分页可见范围不再退化成全量**：视图未完成布局时按一页容量兜底，
+  此前会把整个模型都当成可见，对全部条目派发缩略图请求。
+- **网格视图 resize 加防抖**：`geometry_changed` 只在 50ms 防抖后发一次，
+  与图片墙手感一致。
+- **图片墙字体状态泄漏**：星标把字体改成 15px 粗体后不还原，
+  导致「已损坏」文字与相邻格混排。现在每个细节块各自 `save()/restore()`。
+- **大图关闭后释放位图**：`hideEvent` 里清空 `_pix`，迟到解码结果直接丢弃。
+  此前看过一张 6000×4000 的图后关闭，进程常驻多占约 96MB。
+- **小图双击不再空操作**：改成单一目标缩放函数，两个稳定状态之间切换。
+- **撤销单条异常不再吞掉计数**：逐条 try，返回 `(done, failed, first_error)`；
+  「撤销全部」改为服务端游标翻页取全量。此前硬编码 500 条，
+  超出部分列不出来，确认文案却写「全部」。
+- **重复检测面板处理后续置灰**：写完「已提交：保留 X，移出 N 张」并禁用按钮，
+  避免对同一组二次操作、把已移出项再算进「保留最新」。
+- **`ShareServer` 按配置指纹重建**：改了服务端地址或密钥后不再沿用旧实例。
+- **缓存对话框文案不再叠加**：状态只在 `_refresh(extra=...)` 里写一次。
+- **更新对话框「打开发布页」失败可重试**：失败时保留对话框并复制链接；
+  正文改 `setHtml()`，裸 URL 才真正可点。
+- **分页器夹取载荷**：连点「下一页」不再发出重复页码。
+- **右键点空白也清空选择**，与左键一致。
+
+### 服务端
+
+- **query 参与签名**：canonical 由 `PATH` 改为 `PATH?QUERY`。
+  旧客户端仍按 path 签名，用 `ALLOW_LEGACY_SIG=0` 可强制收紧，默认 1 以便平滑升级。
+- **`AUTH_WINDOW` 显式校验**：非数字时退回 300 秒并夹取上限 3600。
+  此前写成 `"300s"` 会得到 NaN，而 `skew > NaN` 恒为 false，等于把时间窗彻底关掉。
+- **短链支持过期**：`shares.expires_at`（NULL = 长期有效，默认行为不变），
+  过期与撤销同样返回 410。迁移脚本 `server/migrations/0001_add_expires_at.sql`。
+- **访问计数限流**：同一 token 一分钟内只写一次 D1。`/s/*` 是公开端点且无限流，
+  链接被转发后每个访客写一行，Free 计划日写配额打满会连带把创建、撤销、收藏一起打挂。
+- **收藏拉取改游标翻页**，返回 `next_cursor`；列表接口同样支持 `before` 游标。
+- **抽出 `server/src/crypto.js`**：`sha256Hex` 曾在 `auth.js` 与 `oss.js` 各一份，
+  hex 转换散在四处。`parseShortPath()` 统一短链后缀解析，此前路由层与代理层规则不等价。
+- **路由表驱动**：`ROUTES` 数组 + `readJson()`，消掉三段重复的 `bad_json` 字面量。
+- **删除死代码**：`jsName` / `jsUrl` / `signForClient`。
+- **`/health` 输出 `AUTH_WINDOW` 生效值与兼容开关状态**。
+
+### 测试
+
+- 新增 `server/tests/boundary.test.js`（`node --test`，17 项全过）：
+  鉴权（含 query 篡改、空 body 的 POST、时间窗、非法 `AUTH_WINDOW`、旧客户端兼容）、
+  OSS V4 签名（用 `node:crypto` 独立复算比对）、短链解析、收藏校验、HTML 转义。
+  此前服务端完全靠客户端联调当回归测试。
+
+### 其它
+
+- 依赖钉到次版本（`PySide6==6.11.2` 等），新增 `requirements.lock`；
+  `server/package.json` 补 `name/private/type/scripts`，`wrangler` 改 `~4.152.0`。
+- `docs/ARCHITECTURE.md` 按实现纠偏：favorites v1→v2、QSettings 键清单、
+  utils 层补 `secret.py`、删除「core 可独立单测」的过度承诺。
+- 清理死代码：`phash.hamming` / `thumbnail.has_cache` / `OssLibrary.is_public` /
+  `SHARE_EXPIRES`；`IMAGE_EXTS` 收口到 `core/formats.py`。
+- 新增 `src/ui/async_call.py`（后台执行器）、`src/ui/thumb_cache.py`（缓存门面）、
+  `src/ui/input.py`（滚轮量纲），三处重复实现各收成一个共享件。
+
+### 已知未做
+
+- nonce 未落库去重，重放窗口仍等于 `AUTH_WINDOW`（默认 300 秒）。
+- `/s/*` 与 `/health` 未加边缘限流规则。
+- `settings.py` 的 20 组 getter/setter 仍是逐字重复（P3）。
+- 主题色仍有两套来源（`theme.py` 与 `styles.qss`），未做模板化。
+
 ## [1.6.4] - 2026-10-23
 
 看图页加作者署名与手机适配，并把「下载」与「复制代理链接」的流量路径分开。

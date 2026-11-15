@@ -10,10 +10,12 @@ from __future__ import annotations
 from PySide6.QtCore import QPoint, QPointF, QRect, Qt
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import QPushButton, QWidget
+from .input import wheel_steps
 from .theme import BG_VIEWER, FG_PRIMARY
 
 
 class ViewerOverlay(QWidget):
+    ZOOM_STEP = 1.15      # 一格滚轮的缩放倍数
     MIN_SCALE, MAX_SCALE = 0.01, 8.0
 
     def __init__(self, parent, controller):
@@ -113,6 +115,9 @@ class ViewerOverlay(QWidget):
         self.update()
 
     def _on_decoded(self, path_str, qimg) -> None:
+        # 已经关闭：迟到的解码结果直接丢弃，否则刚释放的位图又被装回来
+        if not self.isVisible():
+            return
         # 重扫/换库后 view_items 会被替换或变短，索引可能越界；
         # 必须先校验，否则回调里直接取值会抛 IndexError
         items = self.controller.view_items
@@ -158,14 +163,14 @@ class ViewerOverlay(QWidget):
     def wheelEvent(self, e) -> None:
         if self._pix.isNull() or not self._scale:
             self._scale = self._fit_scale() or 1.0
-        # 优先用 angleDelta（鼠标滚轮）；触控板/高精度设备只有 pixelDelta，
-        # 此时若继续按 angleDelta 判定会把所有滚动当成“向下”而持续缩小。
-        delta = e.angleDelta().y()
-        if delta == 0:
-            delta = e.pixelDelta().y()
-        if delta == 0:
+        # 统一量纲：wheel_steps 返回格数，鼠标与触控板走同一套换算。
+        # 此前这里直接拿 pixelDelta 与 angleDelta 混用且不折算，
+        # 同一块触控板在图片墙与大图页的手感差 3 倍。
+        delta = wheel_steps(e)
+        if not delta:
             return
-        factor = 1.15 if delta > 0 else 1 / 1.15
+        # 统一量纲：一格滚轮 = 一级缩放，与图片墙用同一套换算
+        factor = ZOOM_STEP ** delta
         new_scale = max(self.MIN_SCALE, min(self.MAX_SCALE, self._scale * factor))
         if new_scale == self._scale:
             return
@@ -192,27 +197,54 @@ class ViewerOverlay(QWidget):
         self._drag_pos = None
         self.setCursor(Qt.CursorShape.ArrowCursor)
 
+    def _double_click_target(self) -> float:
+        """双击后应处的缩放。
+
+        只有两个稳定状态：适应窗口（小图封顶 1.0）与原始大小 1.0。
+        原实现拿 `_scale` 与 `fit` 比较，而 `_scale` 初始就是 min(fit,1)，
+        对 40×40 这种小图 fit 约 23、初值 1.0，两个分支算出来都是 1.0，
+        双击后画面完全不动，用户会以为双击失灵。
+        """
+        fit = min(self._fit_scale(), 1.0)
+        # 已经在适应窗口附近 → 切到 100%；否则回到适应窗口
+        if abs(self._scale - fit) <= 1e-6:
+            return 1.0
+        if abs(self._scale - 1.0) <= 1e-6:
+            return max(self.MIN_SCALE, min(fit, self.MAX_SCALE))
+        return max(self.MIN_SCALE, min(fit, self.MAX_SCALE))
+
     def mouseDoubleClickEvent(self, e) -> None:
-        # 双击在 “适应窗口” 与 100% 之间切换
+        # 双击在「适应窗口」与「原始大小」之间切换
         if self._pix.isNull():
             return
-        fit = self._fit_scale()
-        if abs(self._scale - fit) > 1e-6:
-            # 小图适应窗口会算出几十倍放大，必须夹到 MAX_SCALE 以内；
-            # 同时对小图不应放大超过 100%，否则 40×40 会被糊成一片
-            self._scale = max(self.MIN_SCALE,
-                              min(fit, self.MAX_SCALE, 1.0))
-        else:
-            self._scale = 1.0
+        target = self._double_click_target()
+        if abs(target - self._scale) <= 1e-6 and abs(target - 1.0) <= 1e-6:
+            return                      # 已经是目标状态，不产生无意义的重绘
+        self._scale = target
         self._offset = QPointF(0, 0)
         self._user_zoomed = True
         self.update()
+
+    def close_overlay(self) -> None:
+        """关闭并释放整幅原图。
+
+        原实现只 hide()，全分辨率 QPixmap 一直挂在对象上：
+        看过一张 6000×4000 的图后关闭，进程常驻多占约 96MB，
+        长时间浏览内存曲线呈阶梯上升。
+        """
+        self.hide()
+        self._pix = QPixmap()
+
+    def hideEvent(self, e) -> None:
+        super().hideEvent(e)
+        # 无论从哪条路径隐藏（Esc、点击外部、父窗口关闭），都释放位图
+        self._pix = QPixmap()
 
     def keyPressEvent(self, e) -> None:
         k = e.key()
         items = self.controller.view_items
         if k == Qt.Key.Key_Escape:
-            self.hide()
+            self.close_overlay()
         elif k == Qt.Key.Key_Left:
             self.show_index(self._index - 1)
         elif k == Qt.Key.Key_Right:

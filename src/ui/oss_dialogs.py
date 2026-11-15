@@ -8,6 +8,8 @@ from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFormLayout,
                                QHBoxLayout, QLabel, QLineEdit, QProgressBar,
                                QPushButton, QVBoxLayout)
 
+from .async_call import AsyncCaller
+
 
 class OssConfigDialog(QDialog):
     def __init__(self, settings, parent=None):
@@ -30,6 +32,7 @@ class OssConfigDialog(QDialog):
         form.addRow(self.lbl)
         row = QHBoxLayout()
         btn_test = QPushButton("测试连接")
+        self.btn_test = btn_test
         btn_test.clicked.connect(self._test)
         row.addWidget(btn_test)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save
@@ -44,18 +47,39 @@ class OssConfigDialog(QDialog):
                 self.ed_ak.text().strip(), self.ed_sk.text().strip())
 
     def _test(self) -> None:
-        from ..core.oss_service import OssLibrary, friendly_error
+        """测试 OSS 连接。
+
+        网络请求放后台线程，否则地址写错时模态框会冻结到超时，
+        Windows 标「未响应」，用户连取消都点不动。
+        """
+        from ..core.oss_service import OssLibrary
+
         e, b, a, s = self._collect()
         if not (e and b and a and s):
             self.lbl.setText("请先填写完整四项")
             return
-        try:
+
+        def job():
             lib = OssLibrary(e, b, a, s)
-            name = lib.test()
-            ver = "V4" if lib.region else "V1"
-            self.lbl.setText(f"连接成功：{name}（{ver} 签名）")
-        except Exception as exc:
-            self.lbl.setText(f"连接失败：{friendly_error(exc)}")
+            return lib.test(), bool(lib.region)
+
+        if getattr(self, "_test_async", None) is None:
+            self._test_async = AsyncCaller(self)
+        self.btn_test.setEnabled(False)
+        self.lbl.setText("正在连接…")
+        self._test_async.run(job, on_done=self._on_tested,
+                             on_fail=self._on_test_failed)
+
+    def _on_tested(self, result) -> None:
+        from ..core.oss_service import friendly_error  # noqa: F401  (保持文案一致)
+        name, is_v4 = result
+        self.btn_test.setEnabled(True)
+        ver = "V4" if is_v4 else "V1"
+        self.lbl.setText(f"连接成功：{name}（{ver} 签名）")
+
+    def _on_test_failed(self, message: str) -> None:
+        self.btn_test.setEnabled(True)
+        self.lbl.setText(f"连接失败：{message}")
 
     def _save(self) -> None:
         st = self.settings

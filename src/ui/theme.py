@@ -15,6 +15,8 @@ BG_CARD = "#26272b"         # 卡片底色
 BG_CARD_HOVER = "#2c2d31"   # 卡片悬停 / 图片墙占位
 BG_CARD_SEL = "#31406b"     # 卡片选中
 BG_PLACEHOLDER = "#333438"  # 缩略图未就绪的占位块
+BG_BUTTON = "#26272b"
+BG_BUTTON_HOVER = "#313236"
 BG_CORRUPTED = "#3a3b3e"    # 损坏图 / 角标底色
 BORDER = "#3a3b3e"          # 分隔线
 

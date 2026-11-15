@@ -21,6 +21,14 @@ binding = "DB"
 database_name = "qx-album"
 database_id = "f68b4f3a-485d-4fd7-8aeb-a8c49bda9686"
 
+# ---- 模块规则 ----
+# 看图页模板单独放 src/viewer.html，以文本方式打包，
+# 让 HTML 与拼接逻辑分离：新增输出点只能走 viewerPage 的占位符替换。
+[[rules]]
+type = "Text"
+globs = ["**/*.html"]
+fallthrough = true
+
 # ---- 公开变量（非机密）----
 [vars]
 OSS_ENDPOINT = "https://oss-cn-qingdao.aliyuncs.com"

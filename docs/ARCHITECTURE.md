@@ -1,13 +1,16 @@
 # 架构设计
 
-千寻影集 QianXun Album v1.6.4 · 版权所有 © 羡林i (Y_XianLin)
+千寻影集 QianXun Album v1.6.5 · 版权所有 © 羡林i (Y_XianLin)
 
 ## 1. 设计思想
 
 1. **缩略图优先（Thumbnail-First）**：网格/图片墙只消费 256/512 两档落盘缓存；原图仅在大图浏览器按需解码。
 2. **全程异步（Never Block UI）**：扫描、缩略图、哈希、原图解码、文件移动全部在 `QThreadPool` 工作线程；UI 线程只渲染。
 3. **增量呈现**：扫描即出列表；缩略图按视口可见优先调度，占位先行、逐张替换。
-4. **数据与视图分离**：`core/` 服务层不依赖 Qt（`settings.py` 的 QSettings 封装除外），可独立单测。
+4. **数据与视图分离**：`core/` 服务层不依赖 Qt（`settings.py` 的 QSettings 封装除外）。
+   注意：控制层 `controllers.py` 反向引用了视图的 `page_capacity()/pager.set_state()`，
+   因此「视图 + 控制器」目前还不能各自独立实例化；可单测的是 `core/` 里的纯函数
+   （pHash、查重聚类、路径工具、favorites 相对路径）。
 5. **配置就近**：最爱配置跟随图片目录；程序级设置存用户目录。
 6. **无损操作**：移出可逆（`Remove/` + 原路径映射），删除类操作一律不做。
 
@@ -31,7 +34,7 @@
 │ ScanWorker │ ThumbWorker │ DecodeWorker │     │
 │ HashWorker │ MoveWorker                      │
 ├──────────────────────────────────────────────┤
-│ 工具层 utils：file_ops / format / paths       │
+│ 工具层 utils：file_ops / format / paths / secret │
 └──────────────────────────────────────────────┘
 ```
 
@@ -68,21 +71,36 @@
 
 - **WallView（图片墙）**：`QAbstractScrollArea` 自绘。justified 算法：按宽高比贪心累加，`行高 = 视口宽 / Σ宽高比`，达到目标行高即断行；行末格取余宽保证行内无缝；**末行不拉伸**（行高封顶目标值、自然宽度左对齐），避免单张图巨型化。滚轮经 viewport 事件过滤器加速；滚动范围由总布局高度决定；可见范围反推用于缩略图调度。
 - **GridView（分页）**：`QListView(IconMode)` + 自定义 Delegate 绘制卡片（图 + 信息行 + 按钮行 + 角标）。按钮命中：`mousePressEvent` 中对 `delegate.button_rects(visualRect)` 做矩形命中，命中则发 `card_action` 而非选择。
-- 分页容量：`每页 = 列数 × 行数`，由视口与 `sizeHint` 实时计算；窗体变化自动重算并夹取页码。
+- 分页容量：`每页 = 列数 × 行数`，由视口与 `delegate.card_size()` 实时计算；窗体变化自动重算并夹取页码。
+  尺寸变化走 50ms 防抖，`visible_range` 在视图未完成布局时按一页容量兜底，不会退化成全量。
 
 ## 8. 最爱与无损操作
 
-- `favorites.json`：`{"version":1,"items":[{"path":相对路径,"added":时间}]}`，相对路径保证目录整体移动后仍生效。
+- `favorites.json`：`{"version":2,"items":[{"path":相对路径,"added":时间,"updated_at":毫秒}]}`。
+  v1 无 `updated_at`，加载时按 `added` 推算近似值，老文件仍可用。
+  相对路径保证目录整体移动后仍生效；`updated_at` 用于与服务端做 LWW 合并。
 - 移出：`Remove/<原名>`（重名加 `(n)` 后缀），并在 `Remove/.qx_removed.json` 记录 `移出后文件名 → 原相对路径`；还原据此回到原子目录（目录缺失则回根目录），保证可逆。
+
+### 缩略图缓存门面
+
+三个视图统一通过 `ui/thumb_cache.py` 的 `THUMBS` 取图：`tier_for(px)` 决定档位，
+`pixmap/scaled/best` 负责键规则与缩放缓存。视图不再直接使用 `QPixmapCache` 或 `thumb_path`，
+加档位只改这一处。`cache_root_for` 带 `lru_cache`，同一目录不再反复 resolve + sha1。
 
 ## 9. 查重
 
 - pHash 为 numpy 自实现（`core/phash.py`：32×32 灰度 + 二维 DCT，取 8×8 低频与中值比较得 64bit），不依赖 imagehash/scipy，包体显著缩小。
 - 全量加载完成后 `HashWorker` 后台「簇代表」聚类（成员与组首代表汉明距离 ≤ 阈值，默认 4，设置可调 0–12），避免传递性链式合并；结果写 `dup_group`，UI 打蓝标；面板支持按最大/最新保留（其余走可逆移出）。
+- 聚类用 4×16bit 分带倒排索引：鸽巢原理保证总距离 ≤ t 时必有一段距离 ≤ t/4，
+  因此无需两两比较。2 万张全不同图的聚类从数分钟降到 1 秒内，且支持中途取消。
 
 ## 10. 状态持久化（QSettings INI）
 
-键：`default_open_dir / default_save_dir / view_mode / sort_mode / thumb_size / last_dir / last_page / last_scroll / window_geo`。启动恢复顺序：默认目录 > 上次目录。
+键：`default_open_dir / default_save_dir / view_mode / sort_mode / thumb_size / last_dir / last_page / last_scroll / window_geo /`
+`dup_threshold / auto_load_last / scan_parallel / upload_threads / upload_skip_dups / share_days /`
+`check_updates / skipped_version / oss_endpoint / oss_bucket / oss_ak_id / oss_ak_secret /`
+`server_enabled / server_base / server_secret`。
+其中 `oss_ak_secret` 与 `server_secret` 经 Windows DPAPI 加密后存储。启动恢复顺序：默认目录 > 上次目录。
 
 ## 11. 打包与资源
 
@@ -94,7 +112,8 @@
 
 - 扫描：`stat` 与文件头读取失败均退避重试（0.2s 起），仍失败才计错误/标记损坏。
 - 缩略图 `generate` 与原图 `decode_original`：3 次退避重试（0.3s/0.6s），瞬时 SMB/云盘 IO 错误不再误判「已损坏」。
-- 缓存写入失败（磁盘满/只读）静默降级，状态栏提示。
+- 缓存写入失败（磁盘满/只读）静默降级；`ThumbWorker` 失败会计入统计并让对应格子显示占位，
+  不做弹窗打扰（早先文档写成「状态栏提示」，与实现不符）。
 
 ## 13. 扩展点
 

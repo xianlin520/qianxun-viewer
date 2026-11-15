@@ -20,7 +20,7 @@ from PySide6.QtGui import QPixmap
 from .core import thumbnail
 from .core.favorites import FavoritesStore
 from .core.image_item import ImageItem
-from .core.oss_service import (SHARE_EXPIRES, OssIndex, OssLibrary,
+from .core.oss_service import (OssIndex, OssLibrary,
                               friendly_error, is_block_public_error)
 from .core.settings import AppSettings
 from .utils import file_ops
@@ -119,6 +119,11 @@ class LibraryController(QObject):
         self._cloud_keys = None   # 云端 key 缓存（懒加载，上传后增量维护）
         self.share_error = ""     # 最近一次分享失败原因（供 UI 提示）
         self._share_srv = None    # 分享服务端客户端（惰性构造）
+        self._share_srv_key = None  # 构造时的 (base, secret)，变了就重建
+        # 批量移出：收敛完成事件，整批结束才刷新一次视图
+        self._move_pending = 0
+        self._move_batch = 0
+        self._move_last = ""
         # 收藏同步：推送队列 + 合并定时器 + 独立线程池（不与缩略图抢线程）
         self._fav_pending: dict[str, dict] = {}
         self._fav_flush_timer = QTimer(self)
@@ -412,7 +417,7 @@ class LibraryController(QObject):
         self.delegate.thumb_size = value
         self.settings.thumb_size = value
         from PySide6.QtCore import QSize
-        hint = self.delegate.sizeHint(None, None)
+        hint = self.delegate.card_size()
         self.view.setGridSize(QSize(hint.width(), hint.height()))
         if self.view_mode == "page":
             self._apply_to_model()
@@ -638,28 +643,70 @@ class LibraryController(QObject):
 
     # ---------------- 图片操作 ----------------
     def remove_item(self, item) -> None:
-        if self.online_mode or item.remote_key:
+        self.move_many([item])
+
+    def move_many(self, items) -> int:
+        """批量移出。返回实际提交的数量。
+
+        每张图一个 MoveWorker（move_pool 单线程串行，避免抢同一个目标文件），
+        但完成事件收敛到最后一张才刷新视图。
+
+        此前每张图完成都 refresh_view()：过滤全表 + 模型 reset + 图片墙重绘。
+        一次「每组保留最大」处理 500 张重复图就是 500 次全表刷新，
+        UI 线程连续数秒无响应，库越大越接近假死。
+        """
+        items = [it for it in items if it is not None]
+        if not items:
+            return 0
+        if self.online_mode or any(it.remote_key for it in items):
             self.status.emit("在线模式不支持移出，云端删除请到 OSS 控制台操作", 5000)
-            return
+            return 0
         if self.trash_mode:
             # 垃圾桶里的文件已经在 Remove/ 内，再移出会把它在 Remove/ 里改名，
             # 并往 .qx_removed.json 写一条指向 Remove/ 的原路径，还原就乱了
             self.status.emit("垃圾桶内的图片请用「还原」，不要再次移出", 4000)
-            return
+            return 0
+
+        todo = [it for it in items if it in self.all_items]
+        if not todo:
+            return 0
+
         self._suppress_watch()      # 移出会改库根目录，别触发整库重扫
-        w = MoveWorker(item.path, self.main_root or self.root)
-        w.signals.finished.connect(self._on_moved)
-        w.signals.failed.connect(lambda p, m: self.status.emit(f"移出失败：{m}", 5000))
-        self._track(w)
-        self.move_pool.start(w)
+        self._move_pending += len(todo)
+        self._move_batch = len(todo)
+
+        for it in todo:
+            w = MoveWorker(it.path, self.main_root or self.root)
+            w.signals.finished.connect(self._on_moved)
+            w.signals.failed.connect(self._on_move_failed)
+            self._track(w)
+            self.move_pool.start(w)
+        return len(todo)
+
+    def _move_finished_one(self) -> None:
+        """一张结束后收敛；整批归零时才刷新一次。"""
+        self._move_pending = max(0, self._move_pending - 1)
+        if self._move_pending:
+            return
+        self._move_batch, label = 0, self._move_last
+        self._move_last = ""
+        self.refresh_view()
+        self.wall_update.emit()
+        if label:
+            self.status.emit(label, 3000)
 
     def _on_moved(self, src, dst) -> None:
         item = self._by_path.pop(src, None)
         if item is not None and item in self.all_items:
             self.all_items.remove(item)
-        self.refresh_view()
-        self.wall_update.emit()
-        self.status.emit(f"已移入 Remove：{Path(dst).name}", 3000)
+        self._move_last = (f"已移出 {self._move_batch} 张到 Remove"
+                           if self._move_batch > 1
+                           else f"已移入 Remove：{Path(dst).name}")
+        self._move_finished_one()
+
+    def _on_move_failed(self, path, message) -> None:
+        self._move_last = f"移出失败：{message}"
+        self._move_finished_one()
 
     # ---------------- 垃圾桶 ----------------
     def reload_current(self) -> None:
@@ -704,9 +751,10 @@ class LibraryController(QObject):
             self.status.emit(
                 f"已保留{'最大' if by == 'size' else '最新'}，其余 {len(rest)} 张云端删除中…", 3000)
             return
-        for it in rest:
-            self.remove_item(it)
-        self.status.emit(f"已保留{'最大' if by == 'size' else '最新'}，其余移出", 3000)
+        moved = self.move_many(rest)
+        if moved:
+            self.status.emit(
+                f"已保留{'最大' if by == 'size' else '最新'}，其余 {moved} 张移出中…", 3000)
 
     def batch_keep(self, actives: list, by: str) -> None:
         """跨组批处理：每组保留一张（by='size'|'mtime'），其余移出/删除。
@@ -725,11 +773,11 @@ class LibraryController(QObject):
                 f"{'最大' if by == 'size' else '最新'}，"
                 f"其余 {len(rest)} 张云端删除中…", 5000)
             return
-        for it in rest:
-            self.remove_item(it)
-        self.status.emit(
-            f"批处理 {len(actives)} 组：每组保留"
-            f"{'最大' if by == 'size' else '最新'}，其余 {len(rest)} 张移出", 3000)
+        moved = self.move_many(rest)
+        if moved:
+            self.status.emit(
+                f"批处理 {len(actives)} 组：每组保留"
+                f"{'最大' if by == 'size' else '最新'}，其余 {moved} 张移出中…", 4000)
 
     def remove_online_items(self, items) -> None:
         """删除云端对象并同步清理本地索引/视图（不可逆）。"""
@@ -932,7 +980,14 @@ class LibraryController(QObject):
             return None, 0, 0
         self._sync_oss_index()
         oss = self.build_oss()
-        existing = oss.list_keys()
+        # 列举失败必须中止。若把失败当成「云端为空」，
+        # 全库都会被判成未上传，进而整库重传并覆盖同名对象。
+        try:
+            existing = oss.list_keys()
+        except Exception as exc:
+            self.status.emit(
+                f"云端清单获取失败，已中止上传：{friendly_error(exc)}", 8000)
+            return None, 0, 0
         skip_dups = self.settings.upload_skip_dups
         tasks = []
         skipped = 0
@@ -1028,9 +1083,13 @@ class LibraryController(QObject):
         s = self.settings
         if not s.server_enabled or not s.server_base or not s.server_secret:
             return None
-        if self._share_srv is None:
+        # 按配置指纹缓存：改了服务端地址或密钥后必须重建，
+        # 否则改完设置仍用旧实例，表现为「设置看起来生效了但请求仍失败」。
+        key = (s.server_base, s.server_secret)
+        if self._share_srv is None or self._share_srv_key != key:
             from .core.share_server import ShareServer
             self._share_srv = ShareServer(s.server_base, s.server_secret)
+            self._share_srv_key = key
         return self._share_srv
 
     def share_short_link(self, item) -> str | None:

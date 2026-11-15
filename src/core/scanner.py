@@ -18,7 +18,7 @@ from PIL import Image
 
 from .image_item import ImageItem
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
+from .formats import IMAGE_EXTS  # noqa: F401  (对外仍可从 scanner 取)
 _SKIP_DIRS = {"remove", ".qx_cache"}
 _PARALLEL = 8
 

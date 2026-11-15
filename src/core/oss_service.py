@@ -12,9 +12,10 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
+from .formats import IMAGE_EXTS  # noqa: F401
 PREFIX = "qx/"
-SHARE_EXPIRES = 7 * 24 * 3600   # 外链最长 7 天
+# 外链有效期由 settings.share_days 决定（上限 7 天）。
+# 这里曾有一个 SHARE_EXPIRES 常量，无人使用，已删除以免与设置项漂移。
 
 
 def app_data_dir() -> Path:
@@ -203,11 +204,17 @@ class OssLibrary:
             auth = oss2.AuthV4(ak_id, ak_secret)
         else:
             auth = oss2.Auth(ak_id, ak_secret)
+        # 超时必设：不设时底层默认不限，网络不通会长时间挂住工作线程。
+        timeout = dict(connect_timeout=5, read_timeout=20)
         try:
             self.bucket = oss2.Bucket(auth, endpoint, bucket,
-                                      region=self.region or None)
-        except TypeError:   # 老版本 oss2 不接受 region 参数
-            self.bucket = oss2.Bucket(auth, endpoint, bucket)
+                                      region=self.region or None, **timeout)
+        except TypeError:   # 老版本 oss2 不接受 region / timeout 参数
+            try:
+                self.bucket = oss2.Bucket(auth, endpoint, bucket,
+                                          region=self.region or None)
+            except TypeError:
+                self.bucket = oss2.Bucket(auth, endpoint, bucket)
 
     def test(self) -> str:
         info = self.bucket.get_bucket_info()
@@ -221,11 +228,13 @@ class OssLibrary:
             return False
 
     def list_keys(self) -> set:
-        """一次列举全部对象 key（上传前去重用）。"""
-        try:
-            return {o.key for o in self._oss2.ObjectIterator(self.bucket)}
-        except Exception:
-            return set()
+        """一次列举全部对象 key（上传前去重用）。
+
+        **失败必须抛出，不要返回空集合。** 返回空集合会被上传逻辑当成
+        「云端什么都没有」，于是整库重判为未上传、全量重传并覆盖同名对象。
+        同一文件里的 resolve_cloud_key 早就刻意避免了这个降级，这里跟上。
+        """
+        return {o.key for o in self._oss2.ObjectIterator(self.bucket)}
 
     def list_images(self, max_workers: int = 8) -> list:
         """返回 [(key, size, last_modified, width, height)]。
@@ -273,12 +282,6 @@ class OssLibrary:
     def revoke_public(self, key: str) -> None:
         """撤回公共读（对象 ACL 恢复继承桶权限）。"""
         self.bucket.put_object_acl(key, self._oss2.OBJECT_ACL_DEFAULT)
-
-    def is_public(self, key: str) -> bool:
-        try:
-            return self.bucket.get_object_acl(key).acl == "public-read"
-        except Exception:
-            return False
 
     def delete_object(self, key: str) -> None:
         """删除云端对象（不可逆，调用方需自行确认）。"""

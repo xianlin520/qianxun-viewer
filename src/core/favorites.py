@@ -34,6 +34,13 @@ def _ms_from_iso(text: str) -> int:
 class FavoritesStore:
     def __init__(self, root: Path):
         self.root = root
+        # 根目录只 resolve 一次。此前每张图都要 root.resolve() + p.resolve()，
+        # 一次扫描上千张图就是两千次 realpath 系统调用（实测 1.92ms/次）。
+        try:
+            self._root_resolved = root.resolve()
+        except OSError:
+            self._root_resolved = root
+        self._rel_cache: dict[str, str] = {}
         # 相对路径(posix) -> {"added": str, "updated_at": int}
         self.items: dict[str, dict] = {}
         self._readonly = False           # 原文件损坏时置位，禁止覆盖
@@ -143,7 +150,16 @@ class FavoritesStore:
             # 目录只读等场景：内存态仍生效，不中断程序
 
     def _rel(self, p: Path) -> str:
+        key = str(p)
+        cached = self._rel_cache.get(key)
+        if cached is not None:
+            return cached
         try:
-            return p.resolve().relative_to(self.root.resolve()).as_posix()
-        except ValueError:
-            return p.as_posix()
+            rel = p.resolve().relative_to(self._root_resolved).as_posix()
+        except (ValueError, OSError):
+            rel = p.as_posix()
+        # 同一张图在一次会话里会被反复问（标记、渲染、同步比对），
+        # 缓存结果避免重复 realpath。
+        if len(self._rel_cache) < 200_000:
+            self._rel_cache[key] = rel
+        return rel
