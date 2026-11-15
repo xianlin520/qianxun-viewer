@@ -282,6 +282,31 @@ curl -X DELETE https://img.agentstack.vip/api/shares/wXXLwR2 \
 | `favorite` | 0/1 |
 | `updated_at` | LWW 时间戳，大者胜 |
 
+### `nonce_seen`
+
+| 字段 | 说明 |
+|---|---|
+| `nonce` | 主键，已用过的 nonce |
+| `ts` | 首次出现时间（毫秒），用于清理过期行 |
+
+`migrations/0002_add_nonce_seen.sql`。同一 nonce 第二次出现返回 401
+`nonce_replayed`；写入失败或表缺失时放行，避免清理任务把正常请求全挡掉。
+
+### 限流
+
+`/s/*` 与 `/health` 每 IP 每分钟 `RATE_LIMIT_PER_MIN` 次，超出返回 429。
+两层实现见 `src/ratelimit.js`：边缘绑定（命中即拒）加 Cache API 固定窗口计数。
+**不能只靠绑定**：2026-11-15 实测把阈值设成 5 次/60 秒、连打 12 次，
+`limit()` 一路返回 `{success:true}`，绑定显示 bound 但实际不拦；
+同样的阈值下，缓存计数那一层挡掉了 12 次里的 7 次。
+计数按边缘节点各算一份，是近似值。
+
+`GET /health?rl=1` 返回两层的当前读数，用于线上核对：
+
+```json
+{"key":"1.2.3.4","binding":{"success":true},"cacheSupported":true}
+```
+
 ---
 
 ## 8. 本地开发

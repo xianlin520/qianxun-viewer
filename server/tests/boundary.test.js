@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 
 import { verifyRequest } from "../src/auth.js";
+import { tooManyRequests } from "../src/ratelimit.js";
 import { presignGetUrl } from "../src/oss.js";
 import { makeToken, parseShortPath, isExpired } from "../src/shares.js";
 import { validateItem, ValidationError } from "../src/favorites.js";
@@ -30,9 +31,9 @@ const sha256Hex = (s) => createHash("sha256").update(s).digest("hex");
 const hmacHex = (key, msg) => createHmac("sha256", key).update(msg).digest("hex");
 
 /** 构造一个已正确签名的请求 */
-async function signedRequest({ method = "GET", url, body = null, secret = SECRET, skewMs = 0 }) {
+async function signedRequest({ method = "GET", url, body = null, secret = SECRET,
+                              skewMs = 0, nonce = "n0nce" }) {
   const ts = String(Date.now() + skewMs);
-  const nonce = "n0nce";
   const bodyHash =
     method === "GET" || method === "HEAD" ? "" : sha256Hex(body ?? "");
   const u = new URL(url);
@@ -137,6 +138,125 @@ test("签名域覆盖 query：改查询串后同一签名失效", async () => {
   assert.equal((await verifyRequest(mk("/api/shares?limit=5"), ENV)).ok, true);
   assert.equal((await verifyRequest(mk("/api/shares?limit=1"), ENV)).ok, false);
   assert.equal((await verifyRequest(mk("/api/shares?limit=5&oss_key=x"), ENV)).ok, false);
+});
+
+
+// ---------------- nonce 去重 ----------------
+
+/** 最小 D1 替身：记住已落库的 nonce，其余查询返回固定值。 */
+function mockDb({ failOnInsert = false } = {}) {
+  const seen = new Set();
+  return {
+    seen,
+    prepare(sql) {
+      const stmt = {
+        bind(...args) {
+          return {
+            async run() {
+              if (sql.includes("INSERT INTO nonce_seen")) {
+                if (failOnInsert) throw new Error("no such table: nonce_seen");
+                const nonce = String(args[0]);
+                if (seen.has(nonce)) return { meta: { changes: 0 } };
+                seen.add(nonce);
+                return { meta: { changes: 1 } };
+              }
+              return { meta: { changes: 0 } };
+            },
+            async first() { return { 1: 1 }; },
+          };
+        },
+        async first() { return { 1: 1 }; },
+        async run() { return { meta: { changes: 0 } }; },
+      };
+      return stmt;
+    },
+  };
+}
+
+test("nonce：同一 nonce 第二次出现被判重放", async () => {
+  const DB = mockDb();
+  const env = { ...ENV, DB };
+  const first = await verifyRequest(
+    await signedRequest({ url: "https://x.test/api/shares", nonce: "dup-1" }), env);
+  assert.deepEqual(first, { ok: true });
+
+  const second = await verifyRequest(
+    await signedRequest({ url: "https://x.test/api/shares", nonce: "dup-1" }), env);
+  assert.equal(second.ok, false);
+  assert.equal(second.status, 401);
+  assert.equal(second.error, "nonce_replayed");
+  assert.equal(DB.seen.size, 1);
+});
+
+test("nonce：不同 nonce 各自通过", async () => {
+  const env = { ...ENV, DB: mockDb() };
+  for (const n of ["a", "b", "c"]) {
+    const r = await verifyRequest(
+      await signedRequest({ url: "https://x.test/api/shares", nonce: n }), env);
+    assert.equal(r.ok, true, `nonce ${n} 应通过`);
+  }
+});
+
+test("nonce：写表失败时放行，不把正常请求全挡掉", async () => {
+  const env = { ...ENV, DB: mockDb({ failOnInsert: true }) };
+  const r = await verifyRequest(
+    await signedRequest({ url: "https://x.test/api/shares", nonce: "x" }), env);
+  assert.equal(r.ok, true);
+});
+
+test("nonce：没有 DB 绑定时不查重", async () => {
+  const r = await verifyRequest(
+    await signedRequest({ url: "https://x.test/api/shares", nonce: "y" }), ENV);
+  assert.deepEqual(r, { ok: true });
+});
+
+test("nonce：签名错时不写表，避免用脏 nonce 污染去重", async () => {
+  const DB = mockDb();
+  const env = { ...ENV, DB };
+  await verifyRequest(
+    await signedRequest({ url: "https://x.test/api/shares", nonce: "bad", secret: "wrong" }), env);
+  assert.equal(DB.seen.size, 0);
+});
+
+// ---------------- 限流 ----------------
+
+const req = (ip) =>
+  new Request("https://x.test/health", { headers: ip ? { "CF-Connecting-IP": ip } : {} });
+
+test("限流：绑定判定失败时返回超限", async () => {
+  const env = { RATE_LIMITER: { async limit() { return { success: false }; } } };
+  assert.equal(await tooManyRequests(req("1.2.3.4"), env, "s"), true);
+});
+
+test("限流：通过时不拦", async () => {
+  const env = { RATE_LIMITER: { async limit() { return { success: true }; } } };
+  assert.equal(await tooManyRequests(req("1.2.3.4"), env, "s"), false);
+});
+
+test("限流：绑定缺失时放行，本地用例不依赖它", async () => {
+  assert.equal(await tooManyRequests(req("1.2.3.4"), {}, "s"), false);
+  assert.equal(await tooManyRequests(req("1.2.3.4"), null, "s"), false);
+});
+
+test("限流：桶名与 IP 一起做键，两个入口不互相挤占", async () => {
+  const keys = [];
+  const env = { RATE_LIMITER: { async limit({ key }) { keys.push(key); return { success: true }; } } };
+  await tooManyRequests(req("9.9.9.9"), env, "s");
+  await tooManyRequests(req("9.9.9.9"), env, "h");
+  assert.deepEqual(keys, ["s:9.9.9.9", "h:9.9.9.9"]);
+});
+
+test("限流：缺 IP 头时归到同一桶，不因取不到 IP 而放行", async () => {
+  const keys = [];
+  const env = { RATE_LIMITER: { async limit({ key }) { keys.push(key); return { success: false }; } } };
+  const denied = await tooManyRequests(req(null), env, "s");
+  assert.equal(denied, true);
+  assert.deepEqual(keys, ["s:unknown"]);
+});
+
+test("限流：绑定抛错时放行，限流故障不该让看图页全停", async () => {
+  const env = { RATE_LIMITER: { async limit() { throw new Error("boom"); } } };
+  assert.equal(await tooManyRequests(req("1.1.1.1"), env, "s"), false);
 });
 
 // ---------------- OSS V4 签名 ----------------

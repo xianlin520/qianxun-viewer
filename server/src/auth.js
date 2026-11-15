@@ -38,6 +38,43 @@ function authWindowSec(env) {
  * 校验请求签名。
  * @returns {Promise<{ok: true, legacy?: true} | {ok: false, status: number, error: string}>}
  */
+/**
+ * 记录已用过的 nonce；同一 nonce 第二次出现判定为重放。
+ *
+ * 此前 nonce 只参与签名、不落库，时间窗内抓到一条请求就能原样重放。
+ * 用 INSERT ... ON CONFLICT DO NOTHING 的 changes 数判断，一次往返完成。
+ * 没有绑定 DB（单测环境）时跳过，保持纯函数可测。
+ */
+async function claimNonce(env, nonce, ts, ok) {
+  if (!env || !env.DB || !nonce) return ok;
+  try {
+    const r = await env.DB
+      .prepare("INSERT INTO nonce_seen (nonce, ts) VALUES (?, ?) ON CONFLICT(nonce) DO NOTHING")
+      .bind(nonce, Number(ts) || Date.now())
+      .run();
+    if ((r.meta?.changes ?? 0) === 0) {
+      return { ok: false, status: 401, error: "nonce_replayed" };
+    }
+  } catch (e) {
+    // 表不存在或写入失败时放行：鉴权不能因为清理任务把正常请求全挡掉
+    console.error("claimNonce failed", String(e));
+  }
+  return ok;
+}
+
+/** 抽样清理过期 nonce，避免表无限增长。调用方用 waitUntil 挂上。 */
+export async function pruneNonces(env, windowSec) {
+  if (!env || !env.DB) return 0;
+  const cutoff = Date.now() - (windowSec + 60) * 1000;
+  try {
+    const r = await env.DB.prepare("DELETE FROM nonce_seen WHERE ts < ?").bind(cutoff).run();
+    return r.meta?.changes ?? 0;
+  } catch (e) {
+    console.error("pruneNonces failed", String(e));
+    return 0;
+  }
+}
+
 export async function verifyRequest(request, env) {
   const secret = env.QX_SHARED_SECRET;
   if (!secret) {
@@ -83,14 +120,14 @@ export async function verifyRequest(request, env) {
     bodyHash,
   ].join("\n");
   if (safeEqual(await hmacHex(secret, canonical), given)) {
-    return { ok: true };
+    return await claimNonce(env, nonce, ts, { ok: true });
   }
 
   // 兼容窗口：旧客户端只签 path。设为 "0" 即关闭，建议下次发版后关掉。
   if (String(env.ALLOW_LEGACY_SIG ?? "0") === "1") {
     const legacy = [method, url.pathname, ts, nonce, bodyHash].join("\n");
     if (safeEqual(await hmacHex(secret, legacy), given)) {
-      return { ok: true, legacy: true };
+      return await claimNonce(env, nonce, ts, { ok: true, legacy: true });
     }
   }
 

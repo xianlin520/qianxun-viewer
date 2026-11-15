@@ -7,7 +7,7 @@ from __future__ import annotations
 from . import theme
 from .async_call import AsyncCaller
 
-from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QFileDialog, QFormLayout, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QSpinBox, QWidget)
 
@@ -22,6 +22,15 @@ class SettingsDialog(QDialog):
         self.edit_save = QLineEdit(settings.default_save_dir)
         form.addRow("默认读取目录", self._row(self.edit_open))
         form.addRow("默认保存目录", self._row(self.edit_save))
+
+        # 外观：切换立刻生效，不必重启。QSS 与自绘配色都从 theme 取，
+        # 这里只负责换调色板并让已经画出来的控件重绘。
+        self.cmb_theme = QComboBox()
+        self.cmb_theme.addItem("深色（默认）", "dark")
+        self.cmb_theme.addItem("浅色", "light")
+        self.cmb_theme.setCurrentIndex(max(0, self.cmb_theme.findData(settings.theme)))
+        self.cmb_theme.currentIndexChanged.connect(self._on_theme_changed)
+        form.addRow("外观", self.cmb_theme)
         self.spin_dup = QSpinBox()
         self.spin_dup.setRange(0, 12)
         self.spin_dup.setValue(settings.dup_threshold)
@@ -89,6 +98,14 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
+
+    def _on_theme_changed(self) -> None:
+        """切换外观：立刻落库并重绘。取消对话框也不回滚，所见即所得。"""
+        name = self.cmb_theme.currentData()
+        if not name:
+            return
+        self.settings.theme = name
+        theme.apply(name)
 
     def _row(self, edit: QLineEdit) -> QWidget:
         w = QWidget()

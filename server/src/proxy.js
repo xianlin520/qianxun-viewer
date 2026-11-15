@@ -206,17 +206,32 @@ export async function handleShortLink(request, env, token, ctx) {
     return errorPage(500, "签名失败", "服务端无法生成图片地址，请稍后重试。");
   }
 
-  // ---- 默认路径：返回 HTML 看图页，图片走 OSS 直连 ----
-  // 这是主要路径：访客拿到页面，浏览器用 <img> 拉 OSS（约 95ms），
-  // 页面只消耗 1 次 Worker 请求，撤销判定也在这里完成。
+  // ---- 分派 ----
   if (!wantRaw) {
-    const pending = scheduleHit(env, token, ctx);
-    if (pending) await pending;
-    return viewerPage(rec, signedUrl, request.url, token);
+    return serveViewerPage(rec, signedUrl, request, token, env, ctx);
   }
+  return serveRawImage(request, rec, signedUrl, token, env, ctx);
+}
 
-  // ---- 可选路径（?raw=1）：流式代理图片字节 ----
-  // 仅用于「希望在地址栏直接看到图片」的场景。国内经 CF 绕路较慢（2~4s）。
+/**
+ * 看图页：只回一张 HTML，图片由浏览器直连 OSS。
+ *
+ * 主路径。一次页面请求只消耗 1 次 Worker 请求，撤销判定在这里完成。
+ */
+async function serveViewerPage(rec, signedUrl, request, token, env, ctx) {
+  const pending = scheduleHit(env, token, ctx);
+  if (pending) await pending;
+  return viewerPage(rec, signedUrl, request.url, token);
+}
+
+/**
+ * 代理图片字节（?raw=1 或 /s/<token>.<ext>）。
+ *
+ * 国内经 Cloudflare 绕路 2~4 秒，只用于「想在地址栏直接看到图」的场合。
+ * 响应头全部本地重建：Content-Type 走白名单推断，绝不透传上游，
+ * 否则一个被改写的对象就能让浏览器当 HTML 执行。
+ */
+async function serveRawImage(request, rec, signedUrl, token, env, ctx) {
   let upstream;
   try {
     upstream = await fetch(signedUrl, {
@@ -242,19 +257,14 @@ export async function handleShortLink(request, env, token, ctx) {
   const hitPending = scheduleHit(env, token, ctx);
   if (hitPending) await hitPending;
 
-  // ---- 关键：重写响应头 ----
   const headers = new Headers();
   // 只用本地白名单推断，绝不透传上游 Content-Type（见 contentTypeFor 注释）
-  const ct = contentTypeFor(rec.oss_key);
-  headers.set("Content-Type", ct);
+  headers.set("Content-Type", contentTypeFor(rec.oss_key));
   // 禁止浏览器嗅探：即使对象内容不是图片，也不会被当成 HTML 执行
   headers.set("X-Content-Type-Options", "nosniff");
   // 文件名用「短链名.后缀」，例如 s/Jx2Yf9a.jpg。
   // 这样无论用 download 属性还是右键另存，拿到的都是有意义且格式正确的名字。
-  const ext = safeExt(rec.oss_key, "jpg");
-  const fileName = `${token}.${ext}`;
-  // 内联展示而非下载（因为是图片链接，浏览器会直接显示；
-  // 用户点「下载」时靠 download 属性或另存为决定落盘）
+  const fileName = `${token}.${safeExt(rec.oss_key, "jpg")}`;
   headers.set(
     "Content-Disposition",
     `inline; filename="${fileName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
@@ -266,11 +276,8 @@ export async function handleShortLink(request, env, token, ctx) {
   if (len) headers.set("Content-Length", len);
 
   // 缓存策略：图片内容本身可缓存（省 OSS 流量），但撤销判定在缓存之外，
-  // 所以即使这里命中缓存，也只会影响“字节”，不会让已撤销链接复活。
+  // 所以即使这里命中缓存，也只会影响「字节」，不会让已撤销链接复活。
   headers.set("Cache-Control", "public, max-age=3600");
 
-  return new Response(upstream.body, {
-    status: 200,
-    headers,
-  });
+  return new Response(upstream.body, { status: 200, headers });
 }

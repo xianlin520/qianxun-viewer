@@ -17,7 +17,7 @@ from PySide6.QtWidgets import QAbstractScrollArea
 from ..core import thumbnail
 from .input import WHEEL_UNIT, wheel_steps
 from .thumb_cache import THUMBS, ScaleMode, tier_for
-from .theme import ACCENT, BG_APP, BG_CARD_HOVER, BG_CORRUPTED, DANGER, DUP, STAR
+from . import theme
 
 
 def _wheel_delta(e) -> float:
@@ -306,7 +306,7 @@ class WallView(QAbstractScrollArea):
     # ---------------- 绘制 ----------------
     def paintEvent(self, event) -> None:
         p = QPainter(self.viewport())
-        p.fillRect(self.viewport().rect(), QColor(BG_APP))
+        p.fillRect(self.viewport().rect(), QColor(theme.BG_APP))
         v = self.verticalScrollBar().value()
         p.translate(0, -v)
         view_top, view_bot = v, v + self.viewport().height()
@@ -324,8 +324,8 @@ class WallView(QAbstractScrollArea):
             if cell is None:
                 continue
             if item.corrupted:
-                p.fillRect(cell, QColor(BG_CORRUPTED))
-                p.setPen(QColor(DANGER))
+                p.fillRect(cell, QColor(theme.BG_CORRUPTED))
+                p.setPen(QColor(theme.DANGER))
                 p.drawText(cell, Qt.AlignmentFlag.AlignCenter, "已损坏")
             else:
                 # 缓存键与缩放规则统一走 ThumbCache，视图不再自己拼键
@@ -337,7 +337,7 @@ class WallView(QAbstractScrollArea):
                     sy = (scaled.height() - cell.height()) // 2
                     p.drawPixmap(cell, scaled, QRect(sx, sy, cell.width(), cell.height()))
                 else:
-                    p.fillRect(cell, QColor(BG_CARD_HOVER))
+                    p.fillRect(cell, QColor(theme.BG_CARD_HOVER))
             if item.favorite:
                 # 每个细节块单独 save/restore：星标把字体改成 15px 粗体后
                 # 不还原，「已损坏」会以 15px 粗体绘制，与相邻格 13px 常规字混排
@@ -346,13 +346,13 @@ class WallView(QAbstractScrollArea):
                 f.setBold(True)
                 f.setPixelSize(15)
                 p.setFont(f)
-                p.setPen(QColor(STAR))
+                p.setPen(QColor(theme.STAR))
                 p.drawText(QRect(cell.x() + 4, cell.y() + 2, 20, 20),
                            Qt.AlignmentFlag.AlignCenter, "★")
                 p.restore()
             if item.dup_group >= 0:
                 p.save()
-                p.setBrush(QColor(DUP))
+                p.setBrush(QColor(theme.DUP))
                 p.setPen(Qt.PenStyle.NoPen)
                 badge = QRect(cell.right() - 20, cell.y() + 4, 16, 16)
                 p.drawEllipse(badge)
@@ -365,13 +365,13 @@ class WallView(QAbstractScrollArea):
                 p.restore()
             if idx == self._focus:
                 pen = p.pen()
-                p.setPen(QColor(ACCENT))
+                p.setPen(QColor(theme.ACCENT))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(cell.adjusted(1, 1, -1, -1))
                 p.setPen(pen)
             if idx in self.selection:
                 pen = p.pen()
-                p.setPen(QColor(STAR))
+                p.setPen(QColor(theme.STAR))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(cell.adjusted(2, 2, -2, -2))
                 p.setPen(pen)

@@ -11,7 +11,7 @@ from PySide6.QtCore import QPoint, QPointF, QRect, Qt
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import QPushButton, QWidget
 from .input import wheel_steps
-from .theme import HUD_BG, BG_VIEWER, FG_PRIMARY
+from . import theme
 
 
 class ViewerOverlay(QWidget):
@@ -135,7 +135,7 @@ class ViewerOverlay(QWidget):
     # ---------------- 绘制 ----------------
     def paintEvent(self, event) -> None:
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor(BG_VIEWER))
+        p.fillRect(self.rect(), QColor(theme.BG_VIEWER))
         if not self._pix.isNull():
             p.translate(QPointF(self.rect().center()) + self._offset)
             p.scale(self._scale, self._scale)
@@ -154,8 +154,8 @@ class ViewerOverlay(QWidget):
             fm = p.fontMetrics()
             tw = fm.horizontalAdvance(text)
             p.fillRect(QRect(0, 0, min(self.width(), tw + 24), 34),
-                       QColor(HUD_BG))
-            p.setPen(QColor(FG_PRIMARY))
+                       QColor(theme.HUD_BG))
+            p.setPen(QColor(theme.FG_PRIMARY))
             p.drawText(12, 24, text)
         p.end()
 

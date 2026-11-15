@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QListView, QStyledItemDelegate, QStyle
 
 from .thumb_cache import THUMBS, ScaleMode, tier_for
 from ..utils.format import human_size, human_time
-from .theme import BG_BUTTON, BG_CARD, BG_CARD_HOVER, BG_CARD_SEL, BG_CORRUPTED, BG_PLACEHOLDER, DANGER, DUP, FG_MUTED, FG_SECONDARY, STAR, SUCCESS
+from . import theme
 
 ROLE_ITEM = Qt.ItemDataRole.UserRole + 1
 ROLE_INFO = Qt.ItemDataRole.UserRole + 2   # 信息行文案，delegate 只认这个角色
@@ -122,11 +122,11 @@ class ThumbDelegate(QStyledItemDelegate):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         if option.state & QStyle.StateFlag.State_Selected:
-            painter.setBrush(QColor(BG_CARD_SEL))
+            painter.setBrush(QColor(theme.BG_CARD_SEL))
         elif option.state & QStyle.StateFlag.State_MouseOver:
-            painter.setBrush(QColor(BG_CARD_HOVER))
+            painter.setBrush(QColor(theme.BG_CARD_HOVER))
         else:
-            painter.setBrush(QColor(BG_CARD))
+            painter.setBrush(QColor(theme.BG_CARD))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(r, 6, 6)
 
@@ -134,8 +134,8 @@ class ThumbDelegate(QStyledItemDelegate):
                          r.width() - PAD * 2,
                          r.height() - PAD * 2 - INFO_H - (BUTTON_H if self.show_buttons else 0))
         if item.corrupted:
-            painter.fillRect(img_rect, QColor(BG_CORRUPTED))
-            painter.setPen(QColor(DANGER))
+            painter.fillRect(img_rect, QColor(theme.BG_CORRUPTED))
+            painter.setPen(QColor(theme.DANGER))
             painter.drawText(img_rect, Qt.AlignmentFlag.AlignCenter, "已损坏")
         else:
             # 缓存键与缩放规则统一走 ThumbCache，视图不再自己拼键
@@ -147,13 +147,13 @@ class ThumbDelegate(QStyledItemDelegate):
                 y = img_rect.y() + (img_rect.height() - scaled.height()) // 2
                 painter.drawPixmap(x, y, scaled)
             else:
-                painter.fillRect(img_rect, QColor(BG_PLACEHOLDER))
-                painter.setPen(QColor(FG_MUTED))
+                painter.fillRect(img_rect, QColor(theme.BG_PLACEHOLDER))
+                painter.setPen(QColor(theme.FG_MUTED))
                 painter.drawText(img_rect, Qt.AlignmentFlag.AlignCenter, "…")
 
         if item.favorite:
             painter.save()          # 角标会改字体，必须成对 save/restore，
-            painter.setPen(QColor(STAR))   # 否则下方信息行字号被污染
+            painter.setPen(QColor(theme.STAR))   # 否则下方信息行字号被污染
             f = painter.font()
             f.setBold(True)
             f.setPixelSize(15)
@@ -163,7 +163,7 @@ class ThumbDelegate(QStyledItemDelegate):
             painter.restore()
         if item.dup_group >= 0:
             painter.save()
-            painter.setBrush(QColor(DUP))
+            painter.setBrush(QColor(theme.DUP))
             painter.setPen(Qt.PenStyle.NoPen)
             badge = QRect(r.right() - 20, r.y() + 4, 16, 16)
             painter.drawEllipse(badge)
@@ -177,7 +177,7 @@ class ThumbDelegate(QStyledItemDelegate):
 
         info_rect = QRect(r.x() + 2, r.bottom() - INFO_H + 2 - (BUTTON_H if self.show_buttons else 0),
                           r.width() - 4, INFO_H - 4)
-        painter.setPen(QColor(FG_SECONDARY))
+        painter.setPen(QColor(theme.FG_SECONDARY))
         fm = painter.fontMetrics()
         text = fm.elidedText(index.data(ROLE_INFO) or "",
                              Qt.TextElideMode.ElideMiddle, info_rect.width())
@@ -185,16 +185,16 @@ class ThumbDelegate(QStyledItemDelegate):
 
         for action, brect in self.button_rects(r):
             painter.setPen(Qt.PenStyle.NoPen)
-            # 按钮底色独立成 BG_BUTTON：之前借用 BG_CORRUPTED，
+            # 按钮底色独立成 theme.BG_BUTTON：之前借用 theme.BG_CORRUPTED，
             # 改「损坏图」配色会连带改掉五个按钮的底色
-            painter.setBrush(QColor(BG_BUTTON))
+            painter.setBrush(QColor(theme.BG_BUTTON))
             painter.drawRoundedRect(brect, 4, 4)
             if action == "fav" and item.favorite:
-                painter.setPen(QColor(STAR))
+                painter.setPen(QColor(theme.STAR))
             elif action in ("remove", "restore"):
-                painter.setPen(QColor(DANGER) if action == "remove" else QColor(SUCCESS))
+                painter.setPen(QColor(theme.DANGER) if action == "remove" else QColor(theme.SUCCESS))
             else:
-                painter.setPen(QColor(FG_SECONDARY))
+                painter.setPen(QColor(theme.FG_SECONDARY))
             painter.drawText(brect, Qt.AlignmentFlag.AlignCenter, self.glyph(action))
         painter.restore()
 

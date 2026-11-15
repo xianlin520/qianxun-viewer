@@ -105,6 +105,7 @@ class AppSettings:
     default_open_dir = _Field("")
     default_save_dir = _Field("")
     view_mode = _Field("scroll")
+    theme = _Field("dark", normalize=lambda v: (v or "dark").strip().lower())
     sort_mode = _Field("random")
     thumb_size = _Field(180, kind="int")
     last_dir = _Field("")

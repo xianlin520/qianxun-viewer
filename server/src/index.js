@@ -18,6 +18,7 @@
 
 import { verifyRequest } from "./auth.js";
 import { handleShortLink } from "./proxy.js";
+import { tooManyRequests, probe as rlProbe } from "./ratelimit.js";
 import {
   createShare,
   listShares,
@@ -195,11 +196,20 @@ function health(env, url) {
             PUBLIC_BASE: env.PUBLIC_BASE || "MISSING",
             AUTH_WINDOW: effectiveWindow(env),
             ALLOW_LEGACY_SIG: String(env.ALLOW_LEGACY_SIG ?? "0") === "1",
+            RATE_LIMITER: (env.RATE_LIMITER && typeof env.RATE_LIMITER.limit === "function")
+              ? "bound" : "MISSING",
           },
         },
         dbOk ? 200 : 503,
       ),
     );
+}
+
+/** 公开路由的每秒每 IP 上限。非法值退回默认 120，上限 6000（100 次/秒）。 */
+function limitPerMin(env) {
+  const raw = Number(env.RATE_LIMIT_PER_MIN);
+  if (!Number.isFinite(raw) || raw <= 0) return undefined;
+  return Math.min(Math.trunc(raw), 6000);
 }
 
 /** 与 auth.js 同一个口径：非法值退回 300，上限 3600 */
@@ -218,11 +228,22 @@ export default {
     // ---- 公开路由 ----
     // /s/<token> 与 /s/<token>.<ext> 都走同一入口，后缀由 parseShortPath 判定
     if (method === "GET" && path.startsWith("/s/")) {
+      if (await tooManyRequests(request, env, "s", limitPerMin(env))) {
+        return err(429, "rate_limited", "请求过于频繁，请稍后再试。");
+      }
       const { token } = parseShortPath(path);
       return handleShortLink(request, env, token, ctx);
     }
 
+    // 诊断：?rl=1 返回限流两层的当前读数，便于线上核对是否真的在拦
+    if (method === "GET" && path === "/health" && url.searchParams.get("rl") === "1") {
+      return json(await rlProbe(env, request));
+    }
+
     if (method === "GET" && path === "/health") {
+      if (await tooManyRequests(request, env, "h", limitPerMin(env))) {
+        return err(429, "rate_limited", "请求过于频繁，请稍后再试。");
+      }
       return health(env, url);
     }
 

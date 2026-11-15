@@ -103,3 +103,37 @@ QToolTip {
     border: 1px solid @INPUT_BORDER@;
     padding: 3px;
 }
+
+/* 表格与表头。
+   Fusion 的表头默认按系统浅色画，本文件又给 QWidget 设了浅色文字，
+   于是暗色主题下表头是「浅底 + 浅字」，分享记录和查重面板的列标题
+   基本看不见。表头、表体、隔行底色全部收到调色板里，两套主题各自成立。 */
+QTableWidget, QTableView {
+    background: @BG_CARD@;
+    alternate-background-color: @BG_APP@;
+    gridline-color: @BORDER@;
+    border: 1px solid @BORDER@;
+    selection-background-color: @BG_CARD_SEL@;
+    selection-color: @FG_PRIMARY@;
+}
+QTableWidget::item, QTableView::item { padding: 3px 6px; }
+QHeaderView { background: @TOOLBAR_BG@; }
+QHeaderView::section {
+    background: @TOOLBAR_BG@;
+    color: @FG_SECONDARY@;
+    border: none;
+    border-right: 1px solid @BORDER@;
+    border-bottom: 1px solid @BORDER@;
+    padding: 5px 6px;
+}
+QTableCornerButton::section { background: @TOOLBAR_BG@; border: none; }
+
+/* 滚动条：配色也在调色板里，浅色主题下不能还是深灰 */
+QScrollBar:vertical, QScrollBar:horizontal { background: transparent; }
+QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+    background: @SCROLL_HANDLE@;
+    border-radius: 4px;
+    min-height: 28px;
+    min-width: 28px;
+}
+QScrollBar::handle:hover { background: @SCROLL_HOVER@; }

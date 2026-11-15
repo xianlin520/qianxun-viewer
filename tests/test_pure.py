@@ -172,7 +172,17 @@ class TestSettingsFields(unittest.TestCase):
         """
         from src.core.settings import AppSettings
         fields = AppSettings.fields()
-        self.assertEqual(len(fields), 24)
+        # 不钉死总数（加设置项不该改测试），只钉住不可缺失的关键项
+        must_have = {
+            "default_open_dir", "default_save_dir", "view_mode", "sort_mode",
+            "thumb_size", "dup_threshold", "window_geo", "oss_endpoint",
+            "oss_bucket", "oss_ak_id", "oss_ak_secret", "upload_threads",
+            "upload_skip_dups", "share_days", "scan_parallel", "auto_load_last",
+            "server_base", "server_secret", "server_enabled",
+            "skipped_version", "check_updates", "theme",
+        }
+        missing = must_have - set(fields)
+        self.assertFalse(missing, f"设置项缺失：{sorted(missing)}")
         for name, f in fields.items():
             self.assertEqual(f.name, name)
 
@@ -182,12 +192,73 @@ class TestSettingsFields(unittest.TestCase):
         protected = {n for n, f in fields.items() if f.protect}
         self.assertEqual(protected, {"oss_ak_secret", "server_secret"})
 
+    def test_theme_field(self):
+        from src.core.settings import AppSettings
+        f = AppSettings.fields()["theme"]
+        self.assertEqual(f.default, "dark")
+        self.assertEqual(f.normalize("  LIGHT  "), "light")
+
     def test_clamped_fields(self):
         from src.core.settings import AppSettings
         fields = AppSettings.fields()
         self.assertEqual((fields["upload_threads"].lo, fields["upload_threads"].hi), (1, 8))
         self.assertEqual((fields["share_days"].lo, fields["share_days"].hi), (1, 7))
         self.assertEqual((fields["scan_parallel"].lo, fields["scan_parallel"].hi), (1, 16))
+
+
+class TestThemePalettes(unittest.TestCase):
+    def test_palettes_have_identical_keys(self):
+        """两套调色板键必须一致，否则某个主题下会取到空色值。"""
+        from src.ui import theme
+
+        self.assertEqual(set(theme.PALETTES["dark"]), set(theme.PALETTES["light"]))
+
+    def test_every_palette_key_is_a_module_name(self):
+        from src.ui import theme
+
+        for name in theme.PALETTES["dark"]:
+            self.assertTrue(hasattr(theme, name), f"theme 里没有 {name}")
+
+    def test_apply_palette_switches_module_values(self):
+        """自绘代码读的是 theme.X，切换后必须拿到新值。"""
+        from src.ui import theme
+
+        try:
+            theme.apply_palette("dark")
+            dark_bg = theme.BG_APP
+            theme.apply_palette("light")
+            self.assertNotEqual(theme.BG_APP, dark_bg)
+            self.assertEqual(theme.BG_APP, theme.PALETTES["light"]["BG_APP"])
+            # QSS 占位符表要跟着更新，否则样式表还是旧色
+            self.assertEqual(theme.QSS_VARS["BG_APP"], theme.BG_APP)
+        finally:
+            theme.apply_palette("dark")
+
+    def test_unknown_palette_falls_back_to_default(self):
+        from src.ui import theme
+
+        try:
+            theme.apply_palette("no-such-theme")
+            self.assertEqual(theme.current_palette(), theme.DEFAULT_PALETTE)
+        finally:
+            theme.apply_palette("dark")
+
+    def test_views_read_theme_at_paint_time(self):
+        """视图必须 `theme.X`，不能 `from .theme import X`。
+
+        后者在导入时把字符串绑死，换主题不生效 —— 这正是加浅色主题时
+        在三个视图文件里发现的问题。
+        """
+        import re
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent / "src" / "ui"
+        bad = []
+        for f in ("grid_view.py", "wall_view.py", "viewer.py"):
+            text = (root / f).read_text("utf-8")
+            if re.search(r"^from \.theme import ", text, re.M):
+                bad.append(f)
+        self.assertFalse(bad, f"这些文件仍在导入时绑定色值：{bad}")
 
 
 class TestWheelSteps(unittest.TestCase):

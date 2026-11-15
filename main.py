@@ -102,8 +102,11 @@ def main() -> int:
 
     app.setApplicationVersion(meta.VERSION)
     QPixmapCache.setCacheLimit(300 * 1024)  # KB：网格缩略图 QPixmap 内存缓存上限
-    # styles.qss 是模板，@KEY@ 由 theme 的常量替换，配色只有一份真相
+    # styles.qss 是模板，@KEY@ 由 theme 的常量替换，配色只有一份真相。
+    # 调色板必须在渲染之前定下来：qss 里填的是字面色值，渲染完再切就没用了。
     from src.ui import theme as _theme
+    from src.core.settings import AppSettings as _AppSettings
+    _theme.apply_palette(_AppSettings().theme)
     qss = _theme.load_qss(base_dir())
     if qss:
         app.setStyleSheet(qss)
