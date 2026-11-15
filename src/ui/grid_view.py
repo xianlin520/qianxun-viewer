@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QListView, QStyledItemDelegate, QStyle
 
 from .thumb_cache import THUMBS, ScaleMode, tier_for
 from ..utils.format import human_size, human_time
-from .theme import BG_CARD, BG_CARD_HOVER, BG_CARD_SEL, BG_CORRUPTED, BG_PLACEHOLDER, DANGER, DUP, FG_MUTED, FG_SECONDARY, STAR, SUCCESS
+from .theme import BG_BUTTON, BG_CARD, BG_CARD_HOVER, BG_CARD_SEL, BG_CORRUPTED, BG_PLACEHOLDER, DANGER, DUP, FG_MUTED, FG_SECONDARY, STAR, SUCCESS
 
 ROLE_ITEM = Qt.ItemDataRole.UserRole + 1
 ROLE_INFO = Qt.ItemDataRole.UserRole + 2   # 信息行文案，delegate 只认这个角色
@@ -185,7 +185,9 @@ class ThumbDelegate(QStyledItemDelegate):
 
         for action, brect in self.button_rects(r):
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(BG_CORRUPTED))
+            # 按钮底色独立成 BG_BUTTON：之前借用 BG_CORRUPTED，
+            # 改「损坏图」配色会连带改掉五个按钮的底色
+            painter.setBrush(QColor(BG_BUTTON))
             painter.drawRoundedRect(brect, 4, 4)
             if action == "fav" and item.favorite:
                 painter.setPen(QColor(STAR))
