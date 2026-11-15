@@ -107,11 +107,25 @@
 - **全局底色收窄到容器**：`QWidget { background-color }` 改成容器选择器列表，
   删掉 `QLabel{background:transparent}` 与 `main_window` 里的两处补丁。
 
+### 部署
+
+- D1 已应用 `0001_add_expires_at.sql`（`shares` 表新增 `expires_at`，纯增量，
+  旧数据 43 条完好）。
+- Worker 已部署为 `d984d285`。部署后实测：
+  - `/health` → `ok:true / db:up / AUTH_WINDOW:300 / ALLOW_LEGACY_SIG:true`；
+  - 新客户端签 `path?query` → 200；同签名改 query 重放 → 401；
+  - 旧客户端只签 path → 200（`ALLOW_LEGACY_SIG=1` 生效）；
+  - 无签名 / 假签名 / 时间戳偏 ±400s → 全部 401；
+  - 看图页响应头含 CSP（带随机 nonce）、`nosniff`、`no-referrer`、`X-Frame-Options: DENY`；
+  - 用 `oss_key` 塞入 `<img src=x onerror=alert(1)>` 建短链后取页，
+    载荷在 `title` / `.name` / `alt` 三处全部转义，URL 内为百分号编码，
+    无属性注入（自测短链已撤销并清理，库回到 43 条）。
+
 ### 已知未做
 
 - nonce 未落库去重，重放窗口仍等于 `AUTH_WINDOW`（默认 300 秒）。
 - `/s/*` 与 `/health` 未加边缘限流规则。
-- `settings.py` 的 20 组 getter/setter 仍是逐字重复（P3）。
+- `settings.py` 的 20 组 getter/setter 仍是逐字重复（P3，见 IKVEWI 第 8 项）。
 - 浅色主题尚未提供；qss 已模板化，加主题只需在 `theme.py` 里换一组常量。
 
 ## [1.6.4] - 2026-10-23
