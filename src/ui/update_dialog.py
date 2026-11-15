@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QLabel,
                                QTextBrowser, QVBoxLayout)
 
+from . import theme
 from .. import meta
 from ..core.updater import ReleaseInfo
 
@@ -31,7 +32,7 @@ class UpdateDialog(QDialog):
         lay.addWidget(title)
 
         cur = QLabel(f"当前版本 {meta.VERSION}　→　最新版本 {info.version}")
-        cur.setStyleSheet("color:#8a8f98;")
+        cur.setStyleSheet(theme.muted())
         lay.addWidget(cur)
 
         self.view = QTextBrowser()

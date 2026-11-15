@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QDialog, QHBoxLayout,
                                QHeaderView, QLabel, QMessageBox, QPushButton,
                                QTableWidget, QTableWidgetItem, QVBoxLayout)
 
+from . import theme
 from .async_call import AsyncCaller
 
 
@@ -50,7 +51,7 @@ class SharesDialog(QDialog):
         lay.setContentsMargins(10, 10, 10, 10)
 
         self.lbl_summary = QLabel("正在加载…")
-        self.lbl_summary.setStyleSheet("color:#8a8f98;")
+        self.lbl_summary.setStyleSheet(theme.muted())
         lay.addWidget(self.lbl_summary)
 
         self.table = QTableWidget(0, len(self.COLS), self)

@@ -101,13 +101,18 @@
   `SHARE_EXPIRES`；`IMAGE_EXTS` 收口到 `core/formats.py`。
 - 新增 `src/ui/async_call.py`（后台执行器）、`src/ui/thumb_cache.py`（缓存门面）、
   `src/ui/input.py`（滚轮量纲），三处重复实现各收成一个共享件。
+- **主题色收成一份真相**：`styles.qss` 改为模板，占位符由 `theme.load_qss()`
+  在启动时替换，未定义的占位符直接抛错而不是静默渲染成透明；
+  9 处内联 `color:#8a8f98` 换成 `theme.muted()` / `accent_text()`。
+- **全局底色收窄到容器**：`QWidget { background-color }` 改成容器选择器列表，
+  删掉 `QLabel{background:transparent}` 与 `main_window` 里的两处补丁。
 
 ### 已知未做
 
 - nonce 未落库去重，重放窗口仍等于 `AUTH_WINDOW`（默认 300 秒）。
 - `/s/*` 与 `/health` 未加边缘限流规则。
 - `settings.py` 的 20 组 getter/setter 仍是逐字重复（P3）。
-- 主题色仍有两套来源（`theme.py` 与 `styles.qss`），未做模板化。
+- 浅色主题尚未提供；qss 已模板化，加主题只需在 `theme.py` 里换一组常量。
 
 ## [1.6.4] - 2026-10-23
 

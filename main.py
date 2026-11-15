@@ -102,9 +102,11 @@ def main() -> int:
 
     app.setApplicationVersion(meta.VERSION)
     QPixmapCache.setCacheLimit(300 * 1024)  # KB：网格缩略图 QPixmap 内存缓存上限
-    qss = base_dir() / "src" / "ui" / "styles.qss"
-    if qss.exists():
-        app.setStyleSheet(qss.read_text("utf-8"))
+    # styles.qss 是模板，@KEY@ 由 theme 的常量替换，配色只有一份真相
+    from src.ui import theme as _theme
+    qss = _theme.load_qss(base_dir())
+    if qss:
+        app.setStyleSheet(qss)
 
     # 必须在 MainWindow 构造之前接上 newConnection：构造期间（加载 PySide6
     # 全模块/PIL/扫目录）可能收到激活请求，QLocalServer 会把它放进 pending 队列，

@@ -18,6 +18,7 @@ from ..controllers import ASPECT_PRESETS, SORT_MODES, LibraryController
 from ..core.settings import AppSettings
 from ..utils import file_ops
 from ..utils.paths import base_dir
+from . import theme
 from .async_call import AsyncCaller
 from .cache_dialog import CacheDialog
 from .duplicates_dialog import DuplicatesDialog
@@ -57,7 +58,7 @@ class MainWindow(QWidget):
         self.wall = WallView(self)
         self._hint = QLabel("点击「打开目录」或将文件夹拖拽到窗口\n加载图片目录", self)
         self._hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._hint.setStyleSheet("color:#8a8f98;font-size:15px;background:transparent;")
+        self._hint.setStyleSheet(theme.muted(font_size="15px"))
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)

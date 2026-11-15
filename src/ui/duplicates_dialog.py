@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel,
                                QMessageBox, QPushButton, QScrollArea,
                                QGraphicsOpacityEffect, QVBoxLayout, QWidget)
 
+from . import theme
 from .thumb_cache import THUMBS
 from ..utils.format import human_size, human_time
 
@@ -50,7 +51,7 @@ class DuplicatesDialog(QDialog):
         outer.setContentsMargins(8, 8, 8, 8)
         hint = QLabel("单张勾选「排除」跳过误判图片；整组勾选「排除该组」跳过整组；"
                       "底部「一键保留最大/最新」批量处理所有未排除组。")
-        hint.setStyleSheet("color:#8a8f98;")
+        hint.setStyleSheet(theme.muted())
         hint.setWordWrap(True)
         outer.addWidget(hint)
         scroll = QScrollArea()
@@ -73,10 +74,10 @@ class DuplicatesDialog(QDialog):
         for gi, group in enumerate(groups):
             trow = QHBoxLayout()
             title = QLabel(f"第 {gi + 1} 组（{len(group)} 张）")
-            title.setStyleSheet("color:#8ab4f8;font-weight:bold;")
+            title.setStyleSheet(theme.accent_text(bold=True))
             trow.addWidget(title)
             gchk = QCheckBox("排除该组")
-            gchk.setStyleSheet("color:#8a8f98;")
+            gchk.setStyleSheet(theme.muted())
             trow.addWidget(gchk)
             trow.addStretch(1)
             lay.addLayout(trow)
@@ -110,7 +111,7 @@ class DuplicatesDialog(QDialog):
                 info.setWordWrap(True)
                 cell.addWidget(info)
                 chk = QCheckBox("排除（非重复）")
-                chk.setStyleSheet("color:#8a8f98;")
+                chk.setStyleSheet(theme.muted())
                 chk.toggled.connect(lambda on, e=eff: e.set_dim(on))
                 cell.addWidget(chk)
                 checks.append(chk)
@@ -129,7 +130,7 @@ class DuplicatesDialog(QDialog):
                 for b in (b1, b2):
                     b.setToolTip("在线模式：确认后将永久删除云端重复对象（不可逆）")
             st_lbl = QLabel("")
-            st_lbl.setStyleSheet("color:#6ee7a8;font-size:11px;")
+            st_lbl.setStyleSheet(theme.css(color=theme.SUCCESS, font_size="11px"))
             st_lbl.setWordWrap(True)
             st_lbl.setFixedWidth(96)
             btns.addWidget(b1)
@@ -146,7 +147,7 @@ class DuplicatesDialog(QDialog):
             if gi != len(groups) - 1:
                 line = QFrame()
                 line.setFrameShape(QFrame.Shape.HLine)
-                line.setStyleSheet("color:#3a3b3e;")
+                line.setStyleSheet(theme.css(color=theme.BORDER))
                 lay.addWidget(line)
         lay.addStretch(1)
         host.adjustSize()

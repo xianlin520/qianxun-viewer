@@ -4,6 +4,7 @@
 """设置对话框：默认读取目录 / 默认保存目录。"""
 from __future__ import annotations
 
+from . import theme
 from .async_call import AsyncCaller
 
 from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox,
@@ -66,7 +67,7 @@ class SettingsDialog(QDialog):
         form.addRow("服务端密钥", self.edit_srv_secret)
 
         self.lbl_srv = QLabel("密钥与本机 OSS Secret 同样用 Windows DPAPI 加密存储。")
-        self.lbl_srv.setStyleSheet("color:#8a8f98;")
+        self.lbl_srv.setStyleSheet(theme.muted())
         self.lbl_srv.setWordWrap(True)
         form.addRow(self.lbl_srv)
 
