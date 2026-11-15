@@ -38,6 +38,10 @@ OSS_REGION = "cn-qingdao"
 PUBLIC_BASE = "https://img.agentstack.vip"
 # HMAC 时间窗（秒），超出即拒绝，防重放
 AUTH_WINDOW = "300"
+# 旧客户端（v1.6.4 及更早）只签 path，不签 query。
+# 代码默认是关闭（strict）；这里显式打开，是因为线上仍有未升级的安装副本。
+# 等客户端全部升级到 v1.6.5+ 后，把这一行删掉即切到严格模式。
+ALLOW_LEGACY_SIG = "1"
 
 # ---- 机密（用 wrangler secret put 写入，勿写在此处）----
 # QX_SHARED_SECRET   客户端与服务端共享的 HMAC 密钥

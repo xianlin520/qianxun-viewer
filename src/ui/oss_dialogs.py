@@ -71,15 +71,20 @@ class OssConfigDialog(QDialog):
                              on_fail=self._on_test_failed)
 
     def _on_tested(self, result) -> None:
-        from ..core.oss_service import friendly_error  # noqa: F401  (保持文案一致)
         name, is_v4 = result
         self.btn_test.setEnabled(True)
         ver = "V4" if is_v4 else "V1"
         self.lbl.setText(f"连接成功：{name}（{ver} 签名）")
 
-    def _on_test_failed(self, message: str) -> None:
+    def _on_test_failed(self, exc) -> None:
+        from ..core.oss_service import friendly_error
+
         self.btn_test.setEnabled(True)
-        self.lbl.setText(f"连接失败：{message}")
+        try:
+            detail = friendly_error(exc)
+        except Exception:                      # noqa: BLE001
+            detail = f"{type(exc).__name__}: {exc}"
+        self.lbl.setText(f"连接失败：{detail}")
 
     def _save(self) -> None:
         st = self.settings

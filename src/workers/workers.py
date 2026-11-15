@@ -301,6 +301,7 @@ class FavoriteSyncWorker(QRunnable):
         self.items = items or []
         self.pull = pull
         self.pulled: list = []
+        self.pull_error = ""
         self.signals = FavoriteSyncSignals()
 
     def run(self):
@@ -314,9 +315,11 @@ class FavoriteSyncWorker(QRunnable):
             else:
                 failed += len(chunk)
         if self.pull:
-            ok, data = self.srv.pull_favorites()
+            ok, data = self.srv.pull_all_favorites()
             if ok:
                 self.pulled = data
+            else:
+                self.pull_error = str(data)
         _emit(self.signals.finished, sent, failed)
 
 

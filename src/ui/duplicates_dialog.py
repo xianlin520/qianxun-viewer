@@ -91,7 +91,8 @@ class DuplicatesDialog(QDialog):
                 lbl = QLabel()
                 lbl.setFixedSize(CELL, CELL)
                 lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                lbl.setStyleSheet("background:#26272b;border-radius:6px;")
+                lbl.setStyleSheet(
+                    f"background:{theme.BG_CARD};border-radius:6px;")
                 pix = self._preview(item)
                 if pix is not None and not pix.isNull():
                     lbl.setPixmap(pix.scaled(

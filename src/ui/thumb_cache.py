@@ -19,10 +19,11 @@ from PySide6.QtGui import QPixmap, QPixmapCache
 
 from ..core import thumbnail
 
-# 档位常量：与 thumbnail.THUMB_SIZES 对应
-TIER_SMALL = 256
-TIER_LARGE = 512
-TIER_ORDER = (TIER_LARGE, TIER_SMALL)   # 优先取大档
+# 档位直接由 thumbnail.THUMB_SIZES 派生，不另写一份数字：
+# 加一档 1024 时只改 thumbnail 一处，这里的判定与取图顺序自动跟上。
+TIER_ORDER = tuple(sorted(thumbnail.THUMB_SIZES, reverse=True))   # 优先取大档
+TIER_LARGE = TIER_ORDER[0]
+TIER_SMALL = TIER_ORDER[-1]
 
 
 class ScaleMode(Enum):
@@ -33,8 +34,11 @@ class ScaleMode(Enum):
 
 
 def tier_for(px: int) -> int:
-    """按目标显示像素选档位。"""
-    return TIER_LARGE if px > TIER_SMALL else TIER_SMALL
+    """按目标显示像素选档位：取第一个不小于 px 的档，都不够就用最大档。"""
+    for tier in sorted(thumbnail.THUMB_SIZES):
+        if px <= tier:
+            return tier
+    return TIER_LARGE
 
 
 def _pixmap_key(item, tier: int) -> str:

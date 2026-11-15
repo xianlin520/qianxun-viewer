@@ -51,7 +51,12 @@ export async function pushFavorites(env, items) {
   if (!Array.isArray(items) || items.length === 0) {
     return { written: 0, skipped: 0 };
   }
-  const batch = items.slice(0, MAX_PUSH).map(validateItem);
+  // 超限直接报错。此前是 slice(0, MAX_PUSH) 悄悄丢弃尾部，
+  // 客户端按 200 一批发所以碰不到，但服务端不该把「截断」做成静默行为。
+  if (items.length > MAX_PUSH) {
+    throw new ValidationError(`单批上限 ${MAX_PUSH} 条，收到 ${items.length} 条`);
+  }
+  const batch = items.map(validateItem);
 
   // 单次调用内查询数有上限（Free 50），按 50 一批提交
   const stmt = env.DB.prepare(

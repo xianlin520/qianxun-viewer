@@ -23,6 +23,7 @@ from .core.image_item import ImageItem
 from .core.oss_service import (OssIndex, OssLibrary, rel_from_key,
                               friendly_error, is_block_public_error)
 from .core.settings import AppSettings
+from .ui import thumb_cache
 from .utils import file_ops
 from .utils.format import human_size
 from .workers.workers import (DecodeWorker, FavoriteSyncWorker, HashWorker,
@@ -430,7 +431,7 @@ class LibraryController(QObject):
 
     # ---------------- 缩略图调度 ----------------
     def current_tier(self) -> int:
-        return 512 if self.delegate.thumb_size > 256 else 256
+        return thumb_cache.tier_for(self.delegate.thumb_size)
 
     def ensure_visible_thumbs(self, first: int, last: int) -> None:
         items = self.model.items()
@@ -831,15 +832,13 @@ class LibraryController(QObject):
 
     # ---------------- 大图浏览 ----------------
     def fast_pixmap(self, item) -> QPixmap:
-        if self.cache_root is None:
-            return QPixmap()
-        for tier in (512, 256):
-            fp = thumbnail.thumb_path(self.cache_root, item, tier)
-            if fp.exists():
-                pix = QPixmap(str(fp))
-                if not pix.isNull():
-                    return pix
-        return QPixmap()
+        """任意档位已有的缩略图，优先大档。缺缓存返回空 QPixmap。
+
+        走门面而不是自己拼 thumb_path + 档位元组：这是第 5 份同样的实现，
+        改缓存布局时它是唯一一个不会报错、只会静默掉命中率的地方。
+        """
+        pix = thumb_cache.THUMBS.best(self.cache_root, item)
+        return pix if pix is not None else QPixmap()
 
     def item_by_path(self, path_str: str):
         return self._by_path.get(path_str)
@@ -1104,7 +1103,11 @@ class LibraryController(QObject):
         if not key:
             self.share_error = "该图片尚未上传到云，无法生成短链"
             return None
-        ok, res = srv.create_share(key, item.path.name)
+        # 短链与服务端无关地跟着「分享有效期」走。此前 schema / 迁移 / 410
+        # 全都做好了，唯独这里不传值，于是「短链永不过期」这条事实上没修。
+        days = max(1, int(self.settings.share_days))
+        expires_at = int(time.time() * 1000) + days * 86_400_000
+        ok, res = srv.create_share(key, item.path.name, expires_at=expires_at)
         if not ok:
             self.share_error = str(res)
             return None

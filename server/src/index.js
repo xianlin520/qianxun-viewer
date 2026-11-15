@@ -194,7 +194,7 @@ function health(env, url) {
             DB: env.DB ? "bound" : "MISSING",
             PUBLIC_BASE: env.PUBLIC_BASE || "MISSING",
             AUTH_WINDOW: effectiveWindow(env),
-            ALLOW_LEGACY_SIG: String(env.ALLOW_LEGACY_SIG ?? "1") !== "0",
+            ALLOW_LEGACY_SIG: String(env.ALLOW_LEGACY_SIG ?? "0") === "1",
           },
         },
         dbOk ? 200 : 503,
@@ -210,7 +210,7 @@ function effectiveWindow(env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method.toUpperCase();
@@ -219,7 +219,7 @@ export default {
     // /s/<token> 与 /s/<token>.<ext> 都走同一入口，后缀由 parseShortPath 判定
     if (method === "GET" && path.startsWith("/s/")) {
       const { token } = parseShortPath(path);
-      return handleShortLink(request, env, token);
+      return handleShortLink(request, env, token, ctx);
     }
 
     if (method === "GET" && path === "/health") {

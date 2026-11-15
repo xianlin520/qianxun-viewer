@@ -433,13 +433,13 @@ class MainWindow(QWidget):
         self._update_async.run(
             lambda: updater.check_latest(),
             on_done=lambda result: self._on_update_result(result, manual),
-            on_fail=lambda msg: self._on_update_error(msg, manual),
+            on_fail=lambda exc: self._on_update_error(exc, manual),
         )
 
-    def _on_update_error(self, message: str, manual: bool) -> None:
+    def _on_update_error(self, exc, manual: bool) -> None:
         if manual:
             QMessageBox.information(
-                self, "检查更新", f"暂时无法获取版本信息。\n\n{message}")
+                self, "检查更新", f"暂时无法获取版本信息。\n\n{exc}")
 
     def _on_update_result(self, result, manual: bool) -> None:
         info, err = result

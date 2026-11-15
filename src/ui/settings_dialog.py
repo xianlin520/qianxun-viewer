@@ -140,9 +140,10 @@ class SettingsDialog(QDialog):
         self._srv_async.run(job, on_done=self._on_server_tested,
                             on_fail=self._on_server_test_failed)
 
-    def _on_server_test_failed(self, message: str) -> None:
+    def _on_server_test_failed(self, exc) -> None:
         self.btn_test_srv.setEnabled(True)
-        self.lbl_srv.setText(f"连接失败：{message}")
+        detail = str(exc) if isinstance(exc, BaseException) else str(exc)
+        self.lbl_srv.setText(f"连接失败：{detail}")
 
     def _on_server_tested(self, result) -> None:
         self.btn_test_srv.setEnabled(True)

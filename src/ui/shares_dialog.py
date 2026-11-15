@@ -102,12 +102,12 @@ class SharesDialog(QDialog):
                 self.lbl_summary.setText(
                     f"处理结果出错：{type(exc).__name__}: {exc}")
 
-        def failed(msg: str):
+        def failed(exc):
             self._set_buttons(True)
             if on_fail is not None:
-                on_fail(msg)
+                on_fail(exc)
             else:
-                self.lbl_summary.setText(f"操作失败：{msg}")
+                self.lbl_summary.setText(f"操作失败：{exc}")
 
         self._async.run(fn, on_done=done, on_fail=failed)
 
@@ -127,7 +127,7 @@ class SharesDialog(QDialog):
             srv.list_all_shares,
             self._on_listed,
             busy_text="正在加载…",
-            on_fail=lambda m: self.lbl_summary.setText(f"加载失败：{m}"),
+            on_fail=lambda exc: self.lbl_summary.setText(f"加载失败：{exc}"),
         )
 
     def _on_listed(self, result) -> None:

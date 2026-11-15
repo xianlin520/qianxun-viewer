@@ -12,7 +12,8 @@
  *
  * 现在 query 也参与签名。此前只签 pathname，被截获的请求可以改 query
  * 重放（例如把 limit 放大）。旧客户端仍按 path 签名，用
- * ALLOW_LEGACY_SIG=0 可强制只认新签名；默认 1 以便平滑升级。
+ * ALLOW_LEGACY_SIG 默认关闭：客户端 v1.6.5 起已全部签 PATH?QUERY，
+ * 兼容分支只留给尚未升级的旧版本，需要时显式设 "1" 打开。
  */
 
 import { sha256Hex, hmacHex, safeEqual } from "./crypto.js";
@@ -86,7 +87,7 @@ export async function verifyRequest(request, env) {
   }
 
   // 兼容窗口：旧客户端只签 path。设为 "0" 即关闭，建议下次发版后关掉。
-  if (String(env.ALLOW_LEGACY_SIG ?? "1") !== "0") {
+  if (String(env.ALLOW_LEGACY_SIG ?? "0") === "1") {
     const legacy = [method, url.pathname, ts, nonce, bodyHash].join("\n");
     if (safeEqual(await hmacHex(secret, legacy), given)) {
       return { ok: true, legacy: true };

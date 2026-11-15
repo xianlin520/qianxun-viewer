@@ -12,6 +12,7 @@
  * 免得「实现错、测试跟着错」。
  */
 
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
@@ -102,24 +103,40 @@ test("鉴权：缺头被拒", async () => {
   assert.equal(r.error, "missing_auth_headers");
 });
 
-test("鉴权：兼容旧客户端（只签 path）", async () => {
+test("鉴权：只签 path 的旧客户端默认被拒，显式开兼容才放行", async () => {
   const ts = String(Date.now());
   const url = "https://x.test/api/shares?limit=5";
   const u = new URL(url);
-  const legacy = [ "GET", u.pathname, ts, "", ""].join("\n");
+  const legacy = ["GET", u.pathname, ts, "", ""].join("\n");
   const req = new Request(url, {
-    headers: {
-      "X-QX-Timestamp": ts,
-      "X-QX-Signature": hmacHex(SECRET, legacy),
-    },
+    headers: { "X-QX-Timestamp": ts, "X-QX-Signature": hmacHex(SECRET, legacy) },
   });
-  const r = await verifyRequest(req, ENV);
-  assert.equal(r.ok, true);
-  assert.equal(r.legacy, true);
 
-  // 关掉兼容后必须被拒
-  const strict = await verifyRequest(req, { ...ENV, ALLOW_LEGACY_SIG: "0" });
+  // 默认（未设 ALLOW_LEGACY_SIG）必须拒绝：否则改 query 重放这条路一直留着
+  const strict = await verifyRequest(req, ENV);
   assert.equal(strict.ok, false);
+
+  // 显式打开才放行，且标记为 legacy
+  const loose = await verifyRequest(req, { ...ENV, ALLOW_LEGACY_SIG: "1" });
+  assert.equal(loose.ok, true);
+  assert.equal(loose.legacy, true);
+
+  // 显式 "0" 与默认一致
+  const off = await verifyRequest(req, { ...ENV, ALLOW_LEGACY_SIG: "0" });
+  assert.equal(off.ok, false);
+});
+
+test("签名域覆盖 query：改查询串后同一签名失效", async () => {
+  const ts = String(Date.now());
+  const signed = "/api/shares?limit=5";
+  const canon = ["GET", signed, ts, "n1", ""].join("\n");
+  const sig = hmacHex(SECRET, canon);
+  const mk = (path) => new Request(`https://x.test${path}`, {
+    headers: { "X-QX-Timestamp": ts, "X-QX-Nonce": "n1", "X-QX-Signature": sig },
+  });
+  assert.equal((await verifyRequest(mk("/api/shares?limit=5"), ENV)).ok, true);
+  assert.equal((await verifyRequest(mk("/api/shares?limit=1"), ENV)).ok, false);
+  assert.equal((await verifyRequest(mk("/api/shares?limit=5&oss_key=x"), ENV)).ok, false);
 });
 
 // ---------------- OSS V4 签名 ----------------
@@ -242,4 +259,59 @@ test("后缀白名单：拒绝路径与标签字符", () => {
   assert.equal(safeExt("noext"), "jpg");
   assert.equal(safeExt("dir.v1/image", "jpg"), "jpg");
   assert.equal(safeExt("trailing."), "jpg");
+});
+
+
+// ---- 看图页模板：占位符替换必须是函数式 ----
+// 字符串形式的 replaceAll 会把替换值里的 $& / $' 当反向引用，且前一次替换
+// 的结果会被后一次再扫一遍。文件名里放 {{RAW_URL_LITERAL}} 时 alt 的引号
+// 会被提前闭合，属性被突破。
+
+const VIEWER_TPL = readFileSync(new URL("../src/viewer.html", import.meta.url), "utf8");
+
+function renderViewer(name, signedUrl = "https://img/s/T.png?a=1&b=2",
+                      rawUrl = "https://img/s/T.png") {
+  const subst = {
+    "{{CSP_NONCE}}": () => "abc123",
+    "{{NAME}}": () => escapeHtml(name),
+    "{{SIGNED_URL}}": () => escapeAttr(signedUrl),
+    "{{RAW_URL_LITERAL}}": () => jsonLiteral(rawUrl),
+  };
+  return VIEWER_TPL.replaceAll(/\{\{[A-Z_]+\}\}/g, (m) => {
+    const f = subst[m];
+    if (!f) throw new Error(`未定义占位符 ${m}`);
+    return f();
+  });
+}
+
+test("看图页：文件名含 $& 不会被当成反向引用", () => {
+  const html = renderViewer("a$&b.png");
+  const alt = html.match(/alt="([^"]*)"/)[1];
+  assert.equal(alt, "a$&amp;b.png");
+});
+
+test("看图页：文件名里的占位符不会被二次展开", () => {
+  for (const name of ["x{{SIGNED_URL}}.png", "x{{RAW_URL_LITERAL}}.png"]) {
+    const html = renderViewer(name);
+    const alt = html.match(/alt="([^"]*)"/)[1];
+    // 原样保留（已做 HTML 转义），不出现引号闭合、不出现 URL
+    assert.equal(alt, name, `载荷 ${name} 的 alt 被改写了`);
+    assert.ok(!alt.includes('"'), "alt 里出现未转义引号");
+    assert.ok(!html.includes("<img src=x"), "注入了 img 标签");
+  }
+});
+
+test("看图页：经典属性突破载荷被转义", () => {
+  const html = renderViewer('pwn"><img src=x onerror=alert(1)>.png');
+  assert.ok(!html.includes("<img src=x"));
+  assert.ok(html.includes("&quot;&gt;&lt;img"));
+});
+
+test("看图页：模板里出现未定义占位符时抛错", () => {
+  assert.throws(() => {
+    "{{NOT_DEFINED}}".replaceAll(/\{\{[A-Z_]+\}\}/g, (m) => {
+      if (m !== "{{NOT_DEFINED}}") throw new Error("x");
+      throw new Error(`未定义占位符 ${m}`);
+    });
+  }, /未定义占位符/);
 });

@@ -153,12 +153,14 @@ X-QX-Nonce:     <可选随机串>
 **签名算法**：
 
 ```
-canonical = METHOD \n PATH \n TIMESTAMP \n NONCE \n hex(SHA256(body))
+canonical = METHOD \n PATH?QUERY \n TIMESTAMP \n NONCE \n hex(SHA256(body))
 signature = hex(HMAC-SHA256(secret, canonical))
 ```
 
 要点：
-- `PATH` **只含路径，不含 query**（`/api/shares`，不是 `/api/shares?limit=5`）
+- 第二行是「路径 + 查询串」，**query 参与签名**（`/api/shares?limit=5`，
+  只签 `/api/shares` 会被拒）。这样同一个签名无法被改 query 复用。
+- 旧客户端只签路径，`ALLOW_LEGACY_SIG=1` 时仍放行；该开关**默认关闭**
 - `body` 为原始字节；GET/HEAD 请求时 body hash 为空串
 - 时间窗默认 **300 秒**，超出返回 401（`AUTH_WINDOW` 可调）
 - `nonce` 参与签名但不做持久化去重（时间窗已足够防重放；要更强可加 D1 存 nonce）

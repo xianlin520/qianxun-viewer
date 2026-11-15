@@ -1,7 +1,13 @@
 # 千寻影集 QianXun Album
 # 版权所有 (C) 羡林i (Y_XianLin)，保留所有权利。
 
-"""程序级设置封装：QSettings（INI 格式，存用户目录）。"""
+"""程序级设置封装：QSettings（INI 格式，存用户目录）。
+
+每个设置项由一个 `_Field` 描述符声明，键名直接取字段名，只写一次。
+此前是 24 组逐字重复的 `@property`/`@x.setter`，键名在读写两侧各写一遍：
+改名漏改一侧不会报错，只会「读旧键、写新键」，静默不一致。
+其中两个键还是 DPAPI 加密存储的，错了要重新填凭据才能发现。
+"""
 from __future__ import annotations
 
 from PySide6.QtCore import QSettings
@@ -11,102 +17,138 @@ from ..utils import secret
 ORG_NAME = "QianXun"
 APP_NAME = "QianXunViewer"
 
+_FALSE = ("0", "false", "False", "")
+
+
+class _Field:
+    """一个设置项：读时按类型还原并夹取范围，写时按类型落库。
+
+    kind:
+        "str"  字符串，缺失时为空串
+        "int"  整数，按 lo/hi 夹取
+        "bool" 落库为 "1"/"0"
+        "raw"  原样存取（QByteArray 之类，不做 str 转换）
+    """
+
+    def __init__(self, default="", *, kind="str", lo=None, hi=None,
+                 protect=False, normalize=None):
+        self.default = default
+        self.kind = kind
+        self.lo = lo
+        self.hi = hi
+        self.protect = protect
+        self.normalize = normalize
+        self.name = ""
+
+    def __set_name__(self, owner, name):
+        # 键名 = 字段名。这是整个文件里唯一一处「键叫什么」的定义。
+        self.name = name
+
+    # ---- 读 ----
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        raw = obj._s.value(self.name)
+        if self.kind == "raw":
+            return raw
+
+        if self.protect:
+            return secret.unprotect("" if raw is None else str(raw))
+
+        text = str(self.default) if raw is None else str(raw)
+
+        if self.kind == "bool":
+            return text.strip() not in _FALSE
+
+        if self.kind == "int":
+            try:
+                n = int(text)
+            except (TypeError, ValueError):
+                n = int(self.default)
+            if self.lo is not None:
+                n = max(self.lo, n)
+            if self.hi is not None:
+                n = min(self.hi, n)
+            return n
+
+        return text
+
+    # ---- 写 ----
+    def __set__(self, obj, value):
+        if self.normalize is not None:
+            value = self.normalize(value)
+        if self.kind == "raw":
+            obj._s.setValue(self.name, value)
+            return
+        if self.protect:
+            obj._s.setValue(self.name, secret.protect(value or ""))
+            return
+        if self.kind == "bool":
+            obj._s.setValue(self.name, "1" if value else "0")
+            return
+        if self.kind == "int":
+            obj._s.setValue(self.name, int(value))
+            return
+        obj._s.setValue(self.name, "" if value is None else str(value))
+
+
+def _strip_slash(v) -> str:
+    return (v or "").strip().rstrip("/")
+
+
+def _strip(v) -> str:
+    return (v or "").strip()
+
 
 class AppSettings:
+    # ---- 目录与视图 ----
+    default_open_dir = _Field("")
+    default_save_dir = _Field("")
+    view_mode = _Field("scroll")
+    sort_mode = _Field("random")
+    thumb_size = _Field(180, kind="int")
+    last_dir = _Field("")
+    last_page = _Field(0, kind="int")
+    last_scroll = _Field(0, kind="int")
+    dup_threshold = _Field(4, kind="int")
+    window_geo = _Field(None, kind="raw")
+
+    # ---- OSS 在线配置（仅存本机用户目录） ----
+    oss_endpoint = _Field("")
+    oss_bucket = _Field("")
+    oss_ak_id = _Field("")
+    oss_ak_secret = _Field("", protect=True)          # DPAPI 加密
+
+    # ---- 行为设置 ----
+    upload_threads = _Field(4, kind="int", lo=1, hi=8)
+    upload_skip_dups = _Field(True, kind="bool")
+    share_days = _Field(7, kind="int", lo=1, hi=7)
+    scan_parallel = _Field(8, kind="int", lo=1, hi=16)
+    auto_load_last = _Field(True, kind="bool")
+
+    # ---- 分享服务端（Cloudflare Workers 短链） ----
+    server_base = _Field("", normalize=_strip_slash)
+    server_secret = _Field("", protect=True)          # DPAPI 加密
+    server_enabled = _Field(False, kind="bool")
+
+    # ---- 更新检测 ----
+    skipped_version = _Field("", normalize=_strip)
+    check_updates = _Field(True, kind="bool")
+
     def __init__(self) -> None:
         self._s = QSettings(QSettings.Format.IniFormat, QSettings.Scope.UserScope,
                             ORG_NAME, APP_NAME)
         self._migrate_secret()
 
-    def _get(self, key: str, default: str = "") -> str:
-        v = self._s.value(key)
-        return default if v is None else str(v)
-
-    def _get_int(self, key: str, default: int) -> int:
-        try:
-            return int(self._get(key, str(default)))
-        except ValueError:
-            return default
-
-    @property
-    def default_open_dir(self) -> str:
-        return self._get("default_open_dir")
-
-    @default_open_dir.setter
-    def default_open_dir(self, v: str) -> None:
-        self._s.setValue("default_open_dir", v)
-
-    @property
-    def default_save_dir(self) -> str:
-        return self._get("default_save_dir")
-
-    @default_save_dir.setter
-    def default_save_dir(self, v: str) -> None:
-        self._s.setValue("default_save_dir", v)
-
-    @property
-    def view_mode(self) -> str:
-        return self._get("view_mode", "scroll")
-
-    @view_mode.setter
-    def view_mode(self, v: str) -> None:
-        self._s.setValue("view_mode", v)
-
-    @property
-    def sort_mode(self) -> str:
-        return self._get("sort_mode", "random")
-
-    @sort_mode.setter
-    def sort_mode(self, v: str) -> None:
-        self._s.setValue("sort_mode", v)
-
-    @property
-    def thumb_size(self) -> int:
-        return self._get_int("thumb_size", 180)
-
-    @thumb_size.setter
-    def thumb_size(self, v: int) -> None:
-        self._s.setValue("thumb_size", int(v))
-
-    @property
-    def last_dir(self) -> str:
-        return self._get("last_dir")
-
-    @last_dir.setter
-    def last_dir(self, v: str) -> None:
-        self._s.setValue("last_dir", v)
-
-    @property
-    def last_page(self) -> int:
-        return self._get_int("last_page", 0)
-
-    @last_page.setter
-    def last_page(self, v: int) -> None:
-        self._s.setValue("last_page", int(v))
-
-    @property
-    def last_scroll(self) -> int:
-        return self._get_int("last_scroll", 0)
-
-    @last_scroll.setter
-    def last_scroll(self, v: int) -> None:
-        self._s.setValue("last_scroll", int(v))
-
-    @property
-    def dup_threshold(self) -> int:
-        return self._get_int("dup_threshold", 4)
-
-    @dup_threshold.setter
-    def dup_threshold(self, v: int) -> None:
-        self._s.setValue("dup_threshold", int(v))
-
-    @property
-    def window_geo(self):
-        return self._s.value("window_geo")
-
-    @window_geo.setter
-    def window_geo(self, v) -> None:
-        self._s.setValue("window_geo", v)
+    @classmethod
+    def fields(cls) -> dict[str, _Field]:
+        """全部设置项：供一致性用例与文档生成使用。"""
+        out = {}
+        for klass in reversed(cls.__mro__):
+            for name, val in vars(klass).items():
+                if isinstance(val, _Field):
+                    out[name] = val
+        return out
 
     def sync(self) -> None:
         self._s.sync()
@@ -117,123 +159,3 @@ class AppSettings:
         if raw and not str(raw).startswith(secret.PREFIX):
             self._s.setValue("oss_ak_secret", secret.protect(str(raw)))
             self._s.sync()
-
-    # ---- OSS 在线配置（仅存本机用户目录） ----
-    @property
-    def oss_endpoint(self) -> str:
-        return self._get("oss_endpoint")
-
-    @oss_endpoint.setter
-    def oss_endpoint(self, v: str) -> None:
-        self._s.setValue("oss_endpoint", v)
-
-    @property
-    def oss_bucket(self) -> str:
-        return self._get("oss_bucket")
-
-    @oss_bucket.setter
-    def oss_bucket(self, v: str) -> None:
-        self._s.setValue("oss_bucket", v)
-
-    @property
-    def oss_ak_id(self) -> str:
-        return self._get("oss_ak_id")
-
-    @oss_ak_id.setter
-    def oss_ak_id(self, v: str) -> None:
-        self._s.setValue("oss_ak_id", v)
-
-    @property
-    def oss_ak_secret(self) -> str:
-        return secret.unprotect(self._get("oss_ak_secret"))
-
-    @oss_ak_secret.setter
-    def oss_ak_secret(self, v: str) -> None:
-        self._s.setValue("oss_ak_secret", secret.protect(v))
-
-    # ---- 行为设置 ----
-    @property
-    def upload_threads(self) -> int:
-        return max(1, min(8, self._get_int("upload_threads", 4)))
-
-    @upload_threads.setter
-    def upload_threads(self, v: int) -> None:
-        self._s.setValue("upload_threads", int(v))
-
-    @property
-    def upload_skip_dups(self) -> bool:
-        return str(self._get("upload_skip_dups", "1")) not in ("0", "false")
-
-    @upload_skip_dups.setter
-    def upload_skip_dups(self, v: bool) -> None:
-        self._s.setValue("upload_skip_dups", "1" if v else "0")
-
-    @property
-    def share_days(self) -> int:
-        return max(1, min(7, self._get_int("share_days", 7)))
-
-    @share_days.setter
-    def share_days(self, v: int) -> None:
-        self._s.setValue("share_days", int(v))
-
-    @property
-    def scan_parallel(self) -> int:
-        return max(1, min(16, self._get_int("scan_parallel", 8)))
-
-    @scan_parallel.setter
-    def scan_parallel(self, v: int) -> None:
-        self._s.setValue("scan_parallel", int(v))
-
-    @property
-    def auto_load_last(self) -> bool:
-        return str(self._get("auto_load_last", "1")) not in ("0", "false")
-
-    @auto_load_last.setter
-    def auto_load_last(self, v: bool) -> None:
-        self._s.setValue("auto_load_last", "1" if v else "0")
-
-    # ---- 分享服务端（Cloudflare Workers 短链）----
-    @property
-    def server_base(self) -> str:
-        return self._get("server_base", "").rstrip("/")
-
-    @server_base.setter
-    def server_base(self, v: str) -> None:
-        self._s.setValue("server_base", (v or "").strip().rstrip("/"))
-
-    @property
-    def server_secret(self) -> str:
-        """与服务端共享的 HMAC 密钥；与 OSS Secret 同一套 DPAPI 加密。"""
-        return secret.unprotect(self._get("server_secret"))
-
-    @server_secret.setter
-    def server_secret(self, v: str) -> None:
-        self._s.setValue("server_secret", secret.protect(v))
-
-    @property
-    def server_enabled(self) -> bool:
-        """是否启用服务端短链（关闭时回退到直连签名外链）。"""
-        return str(self._get("server_enabled", "0")) not in ("0", "false")
-
-    @server_enabled.setter
-    def server_enabled(self, v: bool) -> None:
-        self._s.setValue("server_enabled", "1" if v else "0")
-
-    # ---- 更新检测 ----
-    @property
-    def skipped_version(self) -> str:
-        """用户点「稍后再说」时记住的版本，同版本不再提示。"""
-        return self._get("skipped_version", "")
-
-    @skipped_version.setter
-    def skipped_version(self, v: str) -> None:
-        self._s.setValue("skipped_version", (v or "").strip())
-
-    @property
-    def check_updates(self) -> bool:
-        """是否在启动后静默检测新版本。"""
-        return str(self._get("check_updates", "1")) not in ("0", "false")
-
-    @check_updates.setter
-    def check_updates(self, v: bool) -> None:
-        self._s.setValue("check_updates", "1" if v else "0")

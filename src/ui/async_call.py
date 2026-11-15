@@ -18,6 +18,10 @@
 
 回调都在 UI 线程执行（Qt 跨线程信号默认排队投递）。
 AsyncCaller 随宿主控件销毁，未完成的回调不会打到已删除的控件上。
+
+on_fail 收到的是异常对象，不是字符串：缩略图与解码共用全局 4 线程池，
+网络调用若也挤进去，一次挂住的「测试连接」就吃掉四分之一吞吐。
+默认给一个 2 线程的私有池，网络 I/O 本来也不需要更高并发。
 """
 from __future__ import annotations
 
@@ -28,7 +32,9 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
 class _Signals(QObject):
     done = Signal(object)
-    failed = Signal(str)
+    # 传异常对象而不是拼好的字符串：调用方要能按异常类型给出可操作提示
+    #（例如 OSS 的 friendly_error 需要读 exc.details）。
+    failed = Signal(object)
 
 
 class _Job(QRunnable):
@@ -46,7 +52,7 @@ class _Job(QRunnable):
         except Exception as exc:      # noqa: BLE001  —— 后台异常必须转成信号
             if not self.cancelled.is_set():
                 try:
-                    self.signals.failed.emit(f"{type(exc).__name__}: {exc}")
+                    self.signals.failed.emit(exc)
                 except RuntimeError:
                     pass              # 接收端已销毁（窗口关闭），静默
             return
@@ -65,14 +71,15 @@ class AsyncCaller(QObject):
     QRunnable 被 GC 掉会连带信号对象消失，表现为「回调永远不来」。
     """
 
+    DEFAULT_THREADS = 2
+
     def __init__(self, parent=None, max_threads: int | None = None):
         super().__init__(parent)
         self._jobs: set[_Job] = set()
-        if max_threads:
-            self._pool = QThreadPool(self)
-            self._pool.setMaxThreadCount(max_threads)
-        else:
-            self._pool = QThreadPool.globalInstance()
+        # 一律私有池：globalInstance() 上的 4 个线程被 ThumbWorker /
+        # DecodeWorker 占着，网络任务混进去会互相拖慢。
+        self._pool = QThreadPool(self)
+        self._pool.setMaxThreadCount(max_threads or self.DEFAULT_THREADS)
 
     def run(self, fn, on_done=None, on_fail=None) -> None:
         job = _Job(fn)

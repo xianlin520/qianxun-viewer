@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from itertools import combinations
 
 from . import phash as _phash
 
@@ -32,26 +33,28 @@ def _band_values(h: int) -> tuple[int, int, int, int]:
     )
 
 
-@lru_cache(maxsize=8192)
-def _close_band_values(v: int, k: int) -> tuple[int, ...]:
-    """与 v 的汉明距离 ≤ k 的全部 16bit 值。k 越大集合膨胀越快，见下方上限。"""
-    out = [v]
-    if k <= 0:
-        return tuple(out)
+@lru_cache(maxsize=4)
+def _flip_masks(k: int) -> tuple[int, ...]:
+    """把「汉明距离 ≤ k 的邻居」表示成 64bit 内的异或掩码序列。
 
-    bits = [1 << i for i in range(BAND_BITS)]
-    for b in bits:                                  # 距离 1
-        out.append(v ^ b)
-    if k >= 2:
-        for i in range(BAND_BITS):                  # 距离 2
-            for j in range(i + 1, BAND_BITS):
-                out.append(v ^ bits[i] ^ bits[j])
-    if k >= 3:
-        for i in range(BAND_BITS):                  # 距离 3
-            for j in range(i + 1, BAND_BITS):
-                for m in range(j + 1, BAND_BITS):
-                    out.append(v ^ bits[i] ^ bits[j] ^ bits[m])
+    掩码只与 k 有关，与数据无关，所以整个进程里最多 4 份（k=0..3），
+    合计 1+16+120+560 个整数。缓存的必须是掩码而不是邻居集合本身：
+    后者随指纹变化，k=3 时单条 697 个值，8192 条实测涨到 218MB。
+    """
+    out = [0]
+    for d in range(1, k + 1):
+        for combo in combinations(range(BAND_BITS), d):
+            m = 0
+            for i in combo:
+                m |= 1 << i
+            out.append(m)
     return tuple(out)
+
+
+def _close_band_values(v: int, k: int):
+    """依次产出与 v 的汉明距离 ≤ k 的全部 16bit 值。"""
+    for m in _flip_masks(k):
+        yield v ^ m
 
 
 def find_groups(items, threshold: int = DEFAULT_THRESHOLD, is_cancelled=None) -> list[list]:
@@ -65,8 +68,13 @@ def find_groups(items, threshold: int = DEFAULT_THRESHOLD, is_cancelled=None) ->
     if not hashed:
         return []
 
-    # 每段 k 位以内才算候选：4 段合计仍能覆盖总距离 ≤ k*4 的所有情况
-    k = min(3, threshold // BANDS)
+    # 鸽巢原理：总距离 ≤ t 时必有一段距离 ≤ t/4，所以每段只需探 k = t//4 位以内。
+    # k 一旦被截断（t > 12），该保证就失效，会漏组。设置界面上限是 12，
+    # 超过的只可能来自手改配置文件，这里夹回 12 而不是静默漏检。
+    k = threshold // BANDS
+    if k > 3:
+        k = 3
+        threshold = BANDS * k
 
     reps: list[int] = []            # 每个簇的代表指纹
     members: list[list] = []        # 每个簇的成员

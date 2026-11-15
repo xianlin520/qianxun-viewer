@@ -181,9 +181,36 @@ class ShareServer:
         """items: [{key, favorite, updated_at}]"""
         return self._request("POST", "/api/favorites", {"items": items})
 
-    def pull_favorites(self, since: int = 0):
-        q = f"?since={int(since)}" if since else ""
+    def pull_favorites(self, since: int = 0, after: int | None = None):
+        """拉一页收藏，返回 (ok, (items, next_cursor))。
+
+        服务端单页上限 1000，超出的靠 next_cursor 翻页。此前这里把
+        next_cursor 丢了，调用方又无参调用，于是第 1001 条起永远拉不到，
+        客户端还认为同步已完成。
+        """
+        parts = []
+        if since:
+            parts.append(f"since={int(since)}")
+        if after:
+            parts.append(f"after={int(after)}")
+        q = ("?" + "&".join(parts)) if parts else ""
         ok, data = self._request("GET", "/api/favorites" + q)
         if not ok:
             return False, data
-        return True, data.get("items", [])
+        if not isinstance(data, dict):
+            return False, "服务端返回格式异常"
+        return True, (data.get("items", []), data.get("nextCursor"))
+
+    def pull_all_favorites(self, since: int = 0, max_pages: int = 100):
+        """翻页拉全，返回 (ok, items)。用于「同步后覆盖本地」这类必须看全的场合。"""
+        out: list = []
+        cursor = None
+        for _ in range(max_pages):
+            ok, res = self.pull_favorites(since=since, after=cursor)
+            if not ok:
+                return False, res
+            items, cursor = res
+            out.extend(items)
+            if not cursor or not items:
+                return True, out
+        return True, out

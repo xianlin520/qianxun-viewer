@@ -1,6 +1,6 @@
 # 架构设计
 
-千寻影集 QianXun Album v1.6.5 · 版权所有 © 羡林i (Y_XianLin)
+千寻影集 QianXun Album v1.6.6 · 版权所有 © 羡林i (Y_XianLin)
 
 ## 1. 设计思想
 
@@ -9,8 +9,14 @@
 3. **增量呈现**：扫描即出列表；缩略图按视口可见优先调度，占位先行、逐张替换。
 4. **数据与视图分离**：`core/` 服务层不依赖 Qt（`settings.py` 的 QSettings 封装除外）。
    注意：控制层 `controllers.py` 反向引用了视图的 `page_capacity()/pager.set_state()`，
-   因此「视图 + 控制器」目前还不能各自独立实例化；可单测的是 `core/` 里的纯函数
-   （pHash、查重聚类、路径工具、favorites 相对路径）。
+   因此「视图 + 控制器」目前还不能各自独立实例化。可单测的是 `core/` 与
+   `ui/` 里不碰 QWidget 的模块：pHash、查重索引、favorites 路径换算、
+   设置项描述符、滚轮量纲、扩展名集合。
+
+   已有用例：`tests/test_pure.py`（20 条）。
+   跑法：`./.venv/Scripts/python.exe -m unittest discover -s tests -v`
+   服务端另有 `server/tests/boundary.test.js`（22 条）：
+   `cd server && node --test tests/boundary.test.js`
 5. **配置就近**：最爱配置跟随图片目录；程序级设置存用户目录。
 6. **无损操作**：移出可逆（`Remove/` + 原路径映射），删除类操作一律不做。
 

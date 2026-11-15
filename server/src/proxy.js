@@ -112,11 +112,20 @@ function viewerPage(rec, signedUrl, pageUrl, token) {
   })();
 
   const nonce = crypto.randomUUID().replace(/-/g, "");
-  const html = VIEWER_TEMPLATE
-    .replaceAll("{{CSP_NONCE}}", nonce)
-    .replaceAll("{{NAME}}", escapeHtml(name))
-    .replaceAll("{{SIGNED_URL}}", escapeAttr(signedUrl))
-    .replaceAll("{{RAW_URL_LITERAL}}", jsonLiteral(rawUrl));
+  // 必须用函数形式：字符串形式下 JS 会把替换值里的 $& / $' 当反向引用，
+  // 且前面的替换结果会被后面的 replaceAll 再次展开。实测文件名里带
+  // {{RAW_URL_LITERAL}} 时 alt 的引号会被提前闭合，属性被突破。
+  const subst = {
+    "{{CSP_NONCE}}": () => nonce,
+    "{{NAME}}": () => escapeHtml(name),
+    "{{SIGNED_URL}}": () => escapeAttr(signedUrl),
+    "{{RAW_URL_LITERAL}}": () => jsonLiteral(rawUrl),
+  };
+  const html = VIEWER_TEMPLATE.replaceAll(/\{\{[A-Z_]+\}\}/g, (m) => {
+    const f = subst[m];
+    if (!f) throw new Error(`viewer.html 有未定义的占位符：${m}`);
+    return f();
+  });
 
   return new Response(html, {
     status: 200,
@@ -131,7 +140,14 @@ function viewerPage(rec, signedUrl, pageUrl, token) {
  *   默认              → 返回 HTML 看图页，图片走 OSS 直连（快，~95ms）
  *   /s/<token>.<ext>  → 流式代理图片字节（链接像图片，下载文件名 = token.ext）
  */
-export async function handleShortLink(request, env, token) {
+/** 计一次访问。有 ctx 就交给 waitUntil，别把 D1 写延迟加在首字节上。 */
+function scheduleHit(env, token, ctx) {
+  const p = recordHit(env, token);
+  if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(p);
+  return ctx ? null : p;
+}
+
+export async function handleShortLink(request, env, token, ctx) {
   if (!token || !/^[0-9A-Za-z]{4,16}$/.test(token)) {
     return errorPage(404, "链接无效", "短链格式不正确。");
   }
@@ -194,7 +210,8 @@ export async function handleShortLink(request, env, token) {
   // 这是主要路径：访客拿到页面，浏览器用 <img> 拉 OSS（约 95ms），
   // 页面只消耗 1 次 Worker 请求，撤销判定也在这里完成。
   if (!wantRaw) {
-    await recordHit(env, token);
+    const pending = scheduleHit(env, token, ctx);
+    if (pending) await pending;
     return viewerPage(rec, signedUrl, request.url, token);
   }
 
@@ -222,7 +239,8 @@ export async function handleShortLink(request, env, token) {
   }
 
   // 计一次访问（失败不影响出图）
-  await recordHit(env, token);
+  const hitPending = scheduleHit(env, token, ctx);
+  if (hitPending) await hitPending;
 
   // ---- 关键：重写响应头 ----
   const headers = new Headers();

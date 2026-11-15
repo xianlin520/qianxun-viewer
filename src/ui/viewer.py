@@ -198,29 +198,33 @@ class ViewerOverlay(QWidget):
         self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def _double_click_target(self) -> float:
-        """双击后应处的缩放。
+        """双击后应处的缩放，只在两个稳定状态之间切换。
 
-        只有两个稳定状态：适应窗口（小图封顶 1.0）与原始大小 1.0。
-        原实现拿 `_scale` 与 `fit` 比较，而 `_scale` 初始就是 min(fit,1)，
-        对 40×40 这种小图 fit 约 23、初值 1.0，两个分支算出来都是 1.0，
-        双击后画面完全不动，用户会以为双击失灵。
+        A「适应窗口」：min(fit, 1.0)，大图缩进窗口，小图保持 100%
+        B「看清细节」：大图到 100%；小图铺到窗口大小（上限 MAX_SCALE）
+
+        早先的实现把 B 也写成 min(fit, 1.0)，对小图 B 与 A 恒等，
+        双击后画面一点不动。40×40 的图在 1000px 窗口里 fit 约 25，
+        A 与 B 都算成 1.0，这就是「小图双击失灵」的全部原因。
         """
-        fit = min(self._fit_scale(), 1.0)
-        # 已经在适应窗口附近 → 切到 100%；否则回到适应窗口
-        if abs(self._scale - fit) <= 1e-6:
-            return 1.0
-        if abs(self._scale - 1.0) <= 1e-6:
-            return max(self.MIN_SCALE, min(fit, self.MAX_SCALE))
-        return max(self.MIN_SCALE, min(fit, self.MAX_SCALE))
+        if self.width() <= 0 or self.height() <= 0:
+            return self._scale        # 控件尚未布局，无从计算
+        fit = self._fit_scale()
+        a = min(fit, 1.0)
+        b = 1.0 if fit < 1.0 else min(fit, self.MAX_SCALE)
+        if abs(b - a) <= 1e-6:
+            # fit 恰好 1.0 时两态重合，给一个明确的放大档而不是空操作
+            b = min(a * 2.0, self.MAX_SCALE)
+        return b if abs(self._scale - a) <= abs(self._scale - b) else a
 
     def mouseDoubleClickEvent(self, e) -> None:
-        # 双击在「适应窗口」与「原始大小」之间切换
+        # 双击在「适应窗口」与「看清细节」之间切换
         if self._pix.isNull():
             return
         target = self._double_click_target()
-        if abs(target - self._scale) <= 1e-6 and abs(target - 1.0) <= 1e-6:
+        if abs(target - self._scale) <= 1e-6:
             return                      # 已经是目标状态，不产生无意义的重绘
-        self._scale = target
+        self._scale = max(self.MIN_SCALE, min(self.MAX_SCALE, target))
         self._offset = QPointF(0, 0)
         self._user_zoomed = True
         self.update()
