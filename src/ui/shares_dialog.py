@@ -148,7 +148,9 @@ class SharesDialog(QDialog):
         self.table.setRowCount(len(self._rows))
         for r, it in enumerate(self._rows):
             oss_key = it.get("oss_key") or ""
-            name = oss_key.rsplit("/", 1)[-1]
+            # 默认上传 key 是路径哈希，云端拿到的是 24 位十六进制：
+            # 直接显示整串没法认，截前 8 位并保留扩展名，完整 key 放提示里。
+            name = _display_name(oss_key)
             revoked = bool(it.get("revoked"))
             expired = bool(it.get("expired"))
             if revoked:
@@ -167,6 +169,8 @@ class SharesDialog(QDialog):
             ]
             for c, text in enumerate(cells):
                 cell = QTableWidgetItem(text)
+                if c == 1:
+                    cell.setToolTip(oss_key)
                 if revoked or expired:
                     cell.setForeground(Qt.GlobalColor.gray)
                 if c == 3:
@@ -280,3 +284,21 @@ class SharesDialog(QDialog):
                 text += f"（{first_error}）"
         self.lbl_summary.setText(text)
         self.reload()
+
+
+_HEX = set("0123456789abcdef")
+
+
+def _display_name(key: str) -> str:
+    """云端 key → 列表里显示的名字。
+
+    哈希模式下 key 形如 `qx/h/<24位十六进制>.jpg`，去掉末段扩展名后
+    如果整段都是十六进制且长度等于 24，就按「哈希前缀…」显示，
+    免得用户以为文件名丢了；原始 key 仍在单元格提示里。
+    """
+    tail = key.rsplit("/", 1)[-1]
+    stem, dot, ext = tail.partition(".")
+    if len(stem) == 24 and stem and all(ch in _HEX for ch in stem):
+        return f"哈希 {stem[:8]}…{dot + ext if dot else ''}"
+    return tail
+

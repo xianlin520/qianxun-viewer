@@ -16,6 +16,7 @@ v1 文件没有这个字段，加载时按 `added` 推一个近似值，保证�
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import datetime
@@ -30,6 +31,19 @@ def _ms_from_iso(text: str) -> int:
         return int(datetime.fromisoformat(text).timestamp() * 1000)
     except (ValueError, TypeError, OSError):
         return 0
+
+
+#: 云端收藏标识的前缀长度。24 位十六进制 = 96 位，撞车概率可忽略。
+REMOTE_KEY_LEN = 24
+
+
+def remote_key(rel: str) -> str:
+    """本地相对路径 → 上传给服务端的标识。
+
+    服务端只存这个哈希：它看不到目录名与文件名，而同一相对路径在任何机器上
+    哈希相同，多机合并仍然成立。这是「同步收藏」能既好用又不上传路径的关键。
+    """
+    return hashlib.sha1(rel.encode("utf-8")).hexdigest()[:REMOTE_KEY_LEN]
 
 
 class FavoritesStore:

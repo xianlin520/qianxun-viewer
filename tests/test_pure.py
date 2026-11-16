@@ -20,7 +20,9 @@ import os
 import random
 import sys
 import tempfile
+import json
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -205,6 +207,131 @@ class TestSettingsFields(unittest.TestCase):
         self.assertEqual((fields["share_days"].lo, fields["share_days"].hi), (1, 7))
         self.assertEqual((fields["scan_parallel"].lo, fields["scan_parallel"].hi), (1, 16))
 
+
+
+
+class TestNetGuard(unittest.TestCase):
+    """本地模式是默认状态，也是最容易被后续改动破坏的一处。"""
+
+    def setUp(self):
+        from src.core import netguard
+        self.ng = netguard
+        self.ng.reset_stats()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.log = Path(self._tmp.name) / "egress.log"
+        self._p1 = mock.patch.object(netguard, "log_path", lambda: self.log)
+        self._p1.start()
+
+    def tearDown(self):
+        self._p1.stop()
+        self._tmp.cleanup()
+
+    def _local(self, on: bool):
+        return mock.patch.object(self.ng, "is_local_only", lambda: on)
+
+    def test_default_blocks_all_scopes(self):
+        with self._local(True):
+            for scope in ("update", "server", "oss"):
+                with self.assertRaises(self.ng.OfflineError, msg=scope):
+                    self.ng.require(scope, "https://example.com/x")
+            st = self.ng.stats()
+            for scope in ("update", "server", "oss"):
+                self.assertEqual(st[scope]["blocked"], 1)
+                self.assertEqual(st[scope]["allowed"], 0)
+
+    def test_blocked_message_is_user_facing(self):
+        with self._local(True):
+            with self.assertRaises(self.ng.OfflineError) as ctx:
+                self.ng.require("oss", "oss-cn-hangzhou.aliyuncs.com")
+        msg = str(ctx.exception)
+        self.assertIn("本地模式", msg)
+        self.assertIn("对象存储", msg)
+
+    def test_online_allows_and_counts(self):
+        with self._local(False):
+            self.ng.require("server", "https://example.com/api")
+        self.assertEqual(self.ng.stats()["server"]["allowed"], 1)
+        self.assertEqual(self.ng.stats()["server"]["blocked"], 0)
+
+    def test_log_records_host_only(self):
+        with self._local(True):
+            with self.assertRaises(self.ng.OfflineError):
+                self.ng.require("server",
+                                "https://img.example.com/api/shares?limit=5&oss_key=qx/h/abc.jpg")
+        line = self.log.read_text("utf-8").strip().splitlines()[-1]
+        rec = json.loads(line)
+        self.assertEqual(rec["host"], "img.example.com")
+        self.assertTrue(rec["blocked"])
+        self.assertEqual(rec["scope"], "server")
+        # 路径与查询串不得进日志：那里可能带着图片名
+        self.assertNotIn("oss_key", line)
+        self.assertNotIn("abc.jpg", line)
+
+    def test_blocked_never_reaches_transport(self):
+        """拦截必须在发请求之前：用假 urlopen 断言一次都没被调用。"""
+        import urllib.request
+        calls = []
+        with mock.patch.object(urllib.request, "urlopen",
+                               lambda *a, **k: calls.append(a)):
+            with self._local(True):
+                from src.core.share_server import ShareServer
+                srv = ShareServer("https://img.example.com", "secret")
+                ok, msg = srv.list_shares(limit=1)
+                from src.core.updater import check_latest
+                info, err = check_latest()
+        self.assertFalse(ok)
+        self.assertIn("本地模式", msg)
+        self.assertIsNone(info)
+        self.assertIn("本地模式", err)
+        self.assertEqual(calls, [], "本地模式下不应有任何 urlopen 调用")
+
+    def test_unknown_scope_rejected(self):
+        with self.assertRaises(ValueError):
+            self.ng.require("ftp", "example.com")
+
+
+class TestCloudKeyPrivacy(unittest.TestCase):
+    """云端 key 不该携带目录名与文件名。"""
+
+    def test_hash_key_hides_names(self):
+        from src.core.oss_service import OssIndex
+        key = OssIndex.make_key("2024/旅行/三亚/DSC_0001.JPG")
+        self.assertNotIn("旅行", key)
+        self.assertNotIn("三亚", key)
+        self.assertNotIn("DSC_0001", key)
+        self.assertTrue(key.startswith("qx/h/"))
+        self.assertTrue(key.endswith(".jpg"), "扩展名保留，否则取图时类型判错")
+
+    def test_hash_key_stable_across_calls(self):
+        from src.core.oss_service import OssIndex
+        a = OssIndex.make_key("a/b.jpg")
+        b = OssIndex.make_key("a/b.jpg")
+        self.assertEqual(a, b)
+
+    def test_hash_key_differs_by_path(self):
+        from src.core.oss_service import OssIndex
+        self.assertNotEqual(OssIndex.make_key("a/b.jpg"),
+                            OssIndex.make_key("a/c.jpg"))
+
+    def test_path_mode_keeps_structure(self):
+        from src.core.oss_service import OssIndex
+        self.assertEqual(OssIndex.make_key("2024/旅行/a.jpg", "path"),
+                         "qx/2024/旅行/a.jpg")
+
+    def test_default_mode_is_hash(self):
+        from src.core.settings import AppSettings
+        self.assertEqual(AppSettings.fields()["oss_key_mode"].default, "hash")
+
+    def test_remote_key_hides_path(self):
+        from src.core.favorites import remote_key
+        k = remote_key("2024/旅行/三亚/DSC_0001.JPG")
+        self.assertEqual(len(k), 24)
+        self.assertNotIn("旅行", k)
+        self.assertNotIn("/", k)
+
+    def test_local_only_default_on(self):
+        from src.core.settings import AppSettings
+        self.assertIs(AppSettings.fields()["local_only"].default, True)
 
 
 class TestFavoritesCursor(unittest.TestCase):

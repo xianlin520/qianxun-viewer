@@ -9,7 +9,8 @@ from .async_call import AsyncCaller
 
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QFileDialog, QFormLayout, QHBoxLayout, QLabel,
-                               QLineEdit, QPushButton, QSpinBox, QWidget)
+                               QLineEdit, QMessageBox, QPushButton, QSpinBox,
+                               QWidget)
 
 
 class SettingsDialog(QDialog):
@@ -87,6 +88,33 @@ class SettingsDialog(QDialog):
         row_srv.addWidget(btn_test_srv)
         row_srv.addStretch(1)
         form.addRow(row_srv)
+
+        # ---- 隐私：本地模式 ----
+        self.chk_local_only = QCheckBox("本地模式（不联网，默认开启）")
+        self.chk_local_only.setChecked(settings.local_only)
+        self.chk_local_only.setToolTip(
+            "开启后，对象存储上传/下载、短链服务端、更新检查全部被拦下，\n"
+            "请求不会离开本机；被拦下的尝试只记到本地的出网日志。")
+        form.addRow(self.chk_local_only)
+
+        self.lbl_privacy = QLabel(
+            "本地模式下，图片、目录名、文件名都留在本机。\n"
+            "关掉本地模式后，以下动作才会真正出网：\n"
+            "· 上传到云：图片文件本身会传到你的 OSS；\n"
+            "· 生成短链：服务端会记录对象 key（默认已改成路径哈希，不含文件名）与你的备注；\n"
+            "· 同步收藏：收藏项的对象 key 会上传，用于多机合并；\n"
+            "· 检查更新：只查 Gitee Releases，不上报任何本地信息。\n"
+            "每次出网都会在本地 egress.log 记一行，只记主机名。")
+        self.lbl_privacy.setStyleSheet(theme.muted())
+        self.lbl_privacy.setWordWrap(True)
+        form.addRow(self.lbl_privacy)
+
+        row_log = QHBoxLayout()
+        self.btn_egress_log = QPushButton("查看出网日志")
+        self.btn_egress_log.clicked.connect(self._show_egress_log)
+        row_log.addWidget(self.btn_egress_log)
+        row_log.addStretch(1)
+        form.addRow(row_log)
 
         # ---- 更新检测 ----
         self.chk_update = QCheckBox("启动后自动检测新版本（仅查询 Gitee Releases）")
@@ -175,6 +203,33 @@ class SettingsDialog(QDialog):
         self.lbl_srv.setText(
             f"连接成功：DB {data.get('db', '?')}，鉴权通过，现有 {result['count']} 条分享")
 
+    def _show_egress_log(self) -> None:
+        """打开出网日志所在目录（不弹日志内容，避免误读成程序输出）。"""
+        from ..core import netguard
+        path = netguard.log_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                path.write_text("", "utf-8")
+            import os
+            os.startfile(str(path))       # noqa: S606 - 用户主动点开的本地文件
+        except Exception as exc:
+            QMessageBox.warning(self, "打开失败", f"{type(exc).__name__}: {exc}")
+
+    def _confirm_online(self) -> bool:
+        """关掉本地模式要显式确认：这一步之后内容才可能离开本机。"""
+        if self.chk_local_only.isChecked() or not self.settings.local_only:
+            return True
+        r = QMessageBox.question(
+            self, "关闭本地模式",
+            "关掉本地模式后，你主动触发的上传、生成短链、同步收藏才会连网。\n\n"
+            "默认的上传 key 是路径哈希，云端看不到目录名与文件名；\n"
+            "把 key 模式改成「保留目录结构」则会把相对路径一并显示在云端。\n\n"
+            "确定关闭本地模式吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        return r == QMessageBox.StandardButton.Yes
+
     def accept(self) -> None:
         self.settings.default_open_dir = self.edit_open.text().strip()
         self.settings.default_save_dir = self.edit_save.text().strip()
@@ -188,4 +243,8 @@ class SettingsDialog(QDialog):
         self.settings.server_base = self.edit_srv.text().strip()
         self.settings.server_secret = self.edit_srv_secret.text().strip()
         self.settings.check_updates = self.chk_update.isChecked()
+        # 隐私开关放最后：确认被拒绝时整轮不保存，避免「一半改了」
+        if not self._confirm_online():
+            return
+        self.settings.local_only = self.chk_local_only.isChecked()
         super().accept()

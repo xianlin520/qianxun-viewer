@@ -78,6 +78,13 @@ class ShareServer:
         if not self.configured():
             return False, "未配置分享服务端"
 
+        # 出网闸门：本地模式直接拦下，请求不出机器
+        from . import netguard
+        try:
+            netguard.require("server", self.base)
+        except netguard.OfflineError as exc:
+            return False, str(exc)
+
         body = b""
         if payload is not None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")

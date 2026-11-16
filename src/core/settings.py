@@ -119,6 +119,10 @@ class AppSettings:
     oss_bucket = _Field("")
     oss_ak_id = _Field("")
     oss_ak_secret = _Field("", protect=True)          # DPAPI 加密
+    # 云端对象 key 的生成方式：hash 只留路径哈希与扩展名，path 保留目录结构
+    oss_key_mode = _Field("hash",
+                          normalize=lambda v: "path" if (v or "").strip().lower() == "path"
+                          else "hash")
 
     # ---- 行为设置 ----
     upload_threads = _Field(4, kind="int", lo=1, hi=8)
@@ -131,6 +135,12 @@ class AppSettings:
     server_base = _Field("", normalize=_strip_slash)
     server_secret = _Field("", protect=True)          # DPAPI 加密
     server_enabled = _Field(False, kind="bool")
+
+    # ---- 隐私 ----
+    # 默认本地模式：所有出网（对象存储、短链服务端、更新检查）全部拦下。
+    # 这是默认值而不是「用户手动打开的开关」，因为默认值决定了绝大多数人
+    # 的实际状态——默认联网就等于默认把路径与图片交出去。
+    local_only = _Field(True, kind="bool")
 
     # ---- 更新检测 ----
     skipped_version = _Field("", normalize=_strip)

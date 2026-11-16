@@ -4,6 +4,7 @@
 """阿里云 OSS 集成：上传 / 列表 / 签名 / 下载 + 增量上传索引。"""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -190,8 +191,21 @@ class OssIndex:
                 pass
 
     @staticmethod
-    def make_key(rel: str) -> str:
-        return PREFIX + Path(rel).as_posix()
+    def make_key(rel: str, mode: str = "hash") -> str:
+        """本地相对路径 → 云端对象 key。
+
+        mode="hash"（默认）：key 只由相对路径的哈希与扩展名组成，
+        云端控制台、短链记录、服务端日志里都看不到目录名与文件名。
+        同一相对路径在任何机器上哈希相同，跨机去重与「同图不重传」照旧成立。
+
+        mode="path"：保留旧行为，key 等于相对路径，便于在 OSS 控制台按目录浏览。
+        这是显式选择，不是默认值。
+        """
+        posix = Path(rel).as_posix()
+        if mode != "hash":
+            return PREFIX + posix
+        digest = hashlib.sha1(posix.encode("utf-8")).hexdigest()[:24]
+        return f"{PREFIX}h/{digest}{Path(posix).suffix.lower()}"
 
     def get(self, ck: str):
         return self.data.get(ck)
@@ -208,6 +222,7 @@ class OssLibrary:
                  ak_secret: str) -> None:
         import oss2
         self._oss2 = oss2
+        self.endpoint = endpoint
         self.bucket_name = bucket
         self.region = oss_region(endpoint)
         if self.region and hasattr(oss2, "AuthV4"):
@@ -238,6 +253,11 @@ class OssLibrary:
         except Exception:
             return False
 
+    def _gate(self) -> None:
+        """所有会连对象存储的入口先过这里。"""
+        from . import netguard
+        netguard.require("oss", self.endpoint)
+
     def list_keys(self) -> set:
         """一次列举全部对象 key（上传前去重用）。
 
@@ -245,6 +265,7 @@ class OssLibrary:
         「云端什么都没有」，于是整库重判为未上传、全量重传并覆盖同名对象。
         同一文件里的 resolve_cloud_key 早就刻意避免了这个降级，这里跟上。
         """
+        self._gate()
         return {o.key for o in self._oss2.ObjectIterator(self.bucket)}
 
     def list_images(self, max_workers: int = 8) -> list:
@@ -299,10 +320,12 @@ class OssLibrary:
         self.bucket.delete_object(key)
 
     def download_to(self, key: str, dest: Path, thumb: int = 0) -> None:
+        self._gate()
         self.bucket.get_object_to_file(key, str(dest),
                                        process=self._process(thumb))
 
     def upload(self, local: Path, key: str, cb=None) -> None:
+        self._gate()
         self._oss2.resumable_upload(self.bucket, key, str(local),
                                     part_size=8 * 1024 * 1024, num_threads=2,
                                     progress_callback=cb)

@@ -58,6 +58,12 @@ def parse_version(text: str) -> tuple[int, ...]:
 
 def check_latest() -> tuple[ReleaseInfo | None, str]:
     """查询最新版本。返回 (info, "") 或 (None, 错误描述)。"""
+    from . import netguard
+    try:
+        netguard.require("update", API_LATEST)
+    except netguard.OfflineError as exc:
+        return None, str(exc)
+
     req = urllib.request.Request(API_LATEST, headers={"User-Agent": UA,
                                                       "Accept": "application/json"})
     try:

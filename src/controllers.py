@@ -18,6 +18,7 @@ from PySide6.QtCore import (QEventLoop, QFileSystemWatcher, QObject,
 from PySide6.QtGui import QPixmap
 
 from .core import thumbnail
+from .core import favorites
 from .core.favorites import FavoritesStore
 from .core.image_item import ImageItem
 from .core.oss_service import (OssIndex, OssLibrary, rel_from_key,
@@ -134,6 +135,8 @@ class LibraryController(QObject):
         self._fav_pool = QThreadPool(self)
         self._fav_pool.setMaxThreadCount(1)   # 串行，保证推送顺序
         self._fav_syncing = False
+        self._rkey_cache: dict[str, str] = {}
+        self._rkey_cache_tag = None
         self.share_blocked = False   # 是否因“阻止公共访问”失败（可降级签名外链）
 
         # 目录变更监听：防抖后自动重扫
@@ -243,10 +246,10 @@ class LibraryController(QObject):
         self.refresh_view()
         self.scan_done.emit()
         self._warm_all_thumbs()
-        # 扫描完成后从云端合并收藏：延迟到事件循环空闲再做，
-        # 避免同步网络请求卡住「扫描完成」这一刻的 UI
-        if not self.trash_mode and not self.online_mode:
-            QTimer.singleShot(1200, self.sync_favorites)
+        # 这里原来会在扫描完成 1.2 秒后自动做一次云端双向同步：把本地全部
+        # 收藏（键是相对路径，等于把目录名与文件名）推到服务端。
+        # 用户没有任何动作、也没有提示。现在改为完全由用户点「同步收藏」触发，
+        # 自动出网的口子不留。
 
     # ---------------- 视图组织 ----------------
     def refresh_view(self) -> None:
@@ -559,6 +562,8 @@ class LibraryController(QObject):
             self._fav_pending.clear()
             return
         items = list(self._fav_pending.values())
+        for it in items:
+            it["key"] = favorites.remote_key(it["key"])
         self._fav_pending.clear()
         w = FavoriteSyncWorker(srv, items=items, pull=False)
         w.signals.finished.connect(
@@ -587,9 +592,11 @@ class LibraryController(QObject):
             self._fav_syncing = False
             return
 
-        # 本地全部收藏（含时间戳）先推上去，保证「本地有、云端无」的条目不会丢
+        # 本地全部收藏（含时间戳）先推上去，保证「本地有、云端无」的条目不会丢。
+        # key 用相对路径的哈希：服务端拿不到目录名与文件名。
         local_items = [
-            {"key": k, "favorite": True, "updated_at": self.favorites.updated_at(k)}
+            {"key": favorites.remote_key(k), "favorite": True,
+             "updated_at": self.favorites.updated_at(k)}
             for k in self.favorites.keys()
         ]
         # 本机记录过的「取消收藏」也要推（用 0 时间戳无意义，直接不推，
@@ -599,6 +606,25 @@ class LibraryController(QObject):
             lambda sent, failed: self._on_fav_sync_done(w, sent, failed, notify))
         self._track(w)
         self._fav_pool.start(w)
+
+    def _remote_key_map(self) -> dict:
+        """哈希 → 相对路径。库扫描结果变了才重建。"""
+        items = self.all_items or []
+        tag = (len(items), str(self.main_root))
+        if self._rkey_cache_tag == tag and self._rkey_cache:
+            return self._rkey_cache
+        base = self.main_root
+        out: dict[str, str] = {}
+        if base is not None:
+            base_abs = str(Path(base))
+            for it in items:
+                p = str(it.path)
+                if p.startswith(base_abs):
+                    rel = p[len(base_abs):].lstrip("\\/").replace("\\", "/")
+                    out[favorites.remote_key(rel)] = rel
+        self._rkey_cache = out
+        self._rkey_cache_tag = tag
+        return out
 
     def _on_fav_sync_done(self, worker, sent: int, failed: int, notify: bool) -> None:
         self._fav_syncing = False
@@ -612,10 +638,14 @@ class LibraryController(QObject):
 
         base = self.main_root
         changed = 0
+        skipped = 0
         if base is not None:
+            # 云端给的是哈希，本地要换回相对路径才能落到收藏库与界面
+            by_hash = self._remote_key_map()
             for rec in pulled:
-                key = str(rec.get("key") or "")
+                key = by_hash.get(str(rec.get("key") or ""))
                 if not key:
+                    skipped += 1       # 本机没有这个文件（或来自旧版本的原样路径）
                     continue
                 fav = bool(rec.get("favorite"))
                 ts = int(rec.get("updated_at") or 0)
@@ -632,6 +662,8 @@ class LibraryController(QObject):
             self.favorites.save()
             self.refresh_view()
             self.status.emit(f"已从云端同步 {changed} 条收藏变更", 4000)
+        elif skipped and notify:
+            self.status.emit(f"云端有 {skipped} 条对不上本机文件，已忽略", 4000)
         elif notify:
             self.status.emit(
                 f"收藏已同步（上传 {sent} 条，无远端变更）"
@@ -1009,7 +1041,7 @@ class LibraryController(QObject):
             except ValueError:
                 outside += 1
                 continue                # 跳过而不是退化成文件名
-            key = OssIndex.make_key(rel)
+            key = self._key_for_rel(rel)
             if key in used_keys:
                 skipped += 1            # 批内撞键：保留先到的，避免互相覆盖
                 continue
@@ -1025,7 +1057,7 @@ class LibraryController(QObject):
                     skipped += 1
                     continue
                 seen[ident] = True
-            tasks.append((it.path, rel, ck))
+            tasks.append((it.path, key, ck))
         if outside:
             self.status.emit(
                 f"有 {outside} 个文件不在当前图库目录内，已跳过上传（避免云端路径冲突）", 6000)
@@ -1034,6 +1066,10 @@ class LibraryController(QObject):
                          threads=self.settings.upload_threads)
         self._track(w)
         return w, len(tasks), skipped
+
+    def _key_for_rel(self, rel: str) -> str:
+        """相对路径 → 云端 key。key 模式由设置决定（默认哈希）。"""
+        return OssIndex.make_key(rel, self.settings.oss_key_mode)
 
     def _rel_key(self, item) -> str:
         """本地项对应的云端对象 key（与上传路径同一规则）。
@@ -1045,7 +1081,7 @@ class LibraryController(QObject):
                 self.main_root.resolve()).as_posix()
         except (ValueError, AttributeError):
             return ""      # 调用方需处理空 key（跳过并提示），不能猜
-        return OssIndex.make_key(rel)
+        return self._key_for_rel(rel)
 
     def resolve_cloud_key(self, item):
         """解析项的云端 key：remote_key → 本地索引 → 云端清单匹配（补登索引）。"""
@@ -1113,7 +1149,9 @@ class LibraryController(QObject):
         # 全都做好了，唯独这里不传值，于是「短链永不过期」这条事实上没修。
         days = max(1, int(self.settings.share_days))
         expires_at = int(time.time() * 1000) + days * 86_400_000
-        ok, res = srv.create_share(key, item.path.name, expires_at=expires_at)
+        # note 留空：此前这里传的是 item.path.name，等于把文件名写进服务端数据库。
+        # 需要备注时由用户在分享面板里自己填，默认不上传任何文件名。
+        ok, res = srv.create_share(key, "", expires_at=expires_at)
         if not ok:
             self.share_error = str(res)
             return None

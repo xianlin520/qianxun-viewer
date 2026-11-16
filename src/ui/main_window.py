@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QLabel,
 
 from .. import meta
 from ..controllers import ASPECT_PRESETS, SORT_MODES, LibraryController
+from ..core import netguard
 from ..core.settings import AppSettings
 from ..utils import file_ops
 from ..utils.paths import base_dir
@@ -68,6 +69,11 @@ class MainWindow(QWidget):
         lay.addWidget(self.view, 1)
         lay.addWidget(self.pager, 0)
         self._status = QStatusBar(self)
+        # 常驻角标：一眼看清当前是否联网。本地模式是默认状态，
+        # 用户不该靠记忆判断「刚才那次上传到底有没有出机器」。
+        self._lbl_net = QLabel()
+        self._lbl_net.setStyleSheet(theme.muted())
+        self._status.addPermanentWidget(self._lbl_net)
         lay.addWidget(self._status, 0)
 
         self.controller = LibraryController(self.model, self.view,
@@ -78,9 +84,22 @@ class MainWindow(QWidget):
         self._ratio_hinted = False
         self._wire()
         self._restore_state()
-        # 启动后延迟静默检测新版本：不阻塞启动，有新版本才提示
-        if self.settings.check_updates:
+        self._refresh_net_badge()
+        # 启动后延迟静默检测新版本：不阻塞启动，有新版本才提示。
+        # 本地模式下 check_latest() 会被闸门拦下，这里提前判一次，省得白跑线程。
+        if self.settings.check_updates and not netguard.is_local_only():
             QTimer.singleShot(3000, lambda: self._check_update(manual=False))
+
+    def _refresh_net_badge(self) -> None:
+        """角标文案跟着设置走：本地模式 / 已联网。"""
+        if netguard.is_local_only():
+            self._lbl_net.setText("本地模式 · 不联网")
+            self._lbl_net.setToolTip("所有出网请求都被拦下，内容不会离开本机。"
+                                     "可在「设置 → 隐私」关闭。")
+        else:
+            self._lbl_net.setText("已联网")
+            self._lbl_net.setToolTip("上传、短链、收藏同步、更新检查会真正连网。"
+                                     "每次出网记在本地 egress.log。")
 
     # ---------------- 构建 ----------------
     def _build_toolbar(self, lay) -> None:

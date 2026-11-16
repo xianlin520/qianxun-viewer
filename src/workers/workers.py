@@ -256,10 +256,11 @@ class UploadWorker(QRunnable):
         total = len(self.tasks)
 
         def one(task):
-            local, rel, ck = task
+            # key 由控制器算好放进任务：哈希模式下它不含文件名，
+            # worker 不再自己拼，避免两处规则漂移
+            local, key, ck = task
             if self.is_cancelled and self.is_cancelled():
                 return
-            key = OssIndex.make_key(rel)
             ok = False
             try:
                 self.oss.upload(local, key)
