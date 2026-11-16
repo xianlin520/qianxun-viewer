@@ -2,7 +2,7 @@
 
 > 千张级图片库，滚动不卡，删图能还原。
 
-Windows 桌面图片查看器 · 版本 v1.7.0 · 免安装
+Windows 桌面图片查看器 · 版本 v1.7.2 · 免安装
 
 ![图片](E:\QoderWork\qianxun-viewer\docs\screenshots\feishu_1_doxcnw.png)
 
@@ -145,8 +145,8 @@ Windows 桌面图片查看器 · 版本 v1.7.0 · 免安装
 
 Windows 10/11 x64，不需要装 Python。
 
-- **单文件版** `QianXunViewer-v1.7.0.exe`：一个文件，拷到哪都能跑，首次启动稍慢
-- **目录版** `QianXunViewer-v1.7.0-win64.zip`：解压即用，启动更快
+- **单文件版** `QianXunViewer-v1.7.2.exe`：一个文件，拷到哪都能跑，首次启动稍慢
+- **目录版** `QianXunViewer-v1.7.2-win64.zip`：解压即用，启动更快
 
 下载地址：[Gitee Releases](https://gitee.com/qianxun-cloud/qianxun-viewer/releases)
 
