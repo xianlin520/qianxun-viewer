@@ -210,6 +210,67 @@ class TestSettingsFields(unittest.TestCase):
 
 
 
+
+
+class TestErrorExplain(unittest.TestCase):
+    """报错要说人能懂的话，同时保留错误码。"""
+
+    def test_connection_reset_is_named(self):
+        from src.core.share_server import explain
+        exc = ConnectionResetError(10054, "远程主机强迫关闭了一个现有的连接。")
+        msg = explain(exc)
+        self.assertIn("中断", msg)
+        self.assertIn("10054", msg, "原始错误码必须保留，否则没法排查")
+
+    def test_dns_failure_is_named(self):
+        import urllib.error
+        from src.core.share_server import explain
+        exc = urllib.error.URLError(OSError(11001, "getaddrinfo failed"))
+        self.assertIn("解析", explain(exc))
+
+    def test_timeout_is_named(self):
+        from src.core.share_server import explain
+        self.assertIn("中断", explain(TimeoutError("timed out")))
+
+    def test_unknown_error_passes_through(self):
+        from src.core.share_server import explain
+        self.assertIn("ValueError", explain(ValueError("x")))
+
+    def test_health_retries_transient_once(self):
+        """第一次 10054、第二次成功时，health 必须返回成功。"""
+        import urllib.request
+        from unittest import mock
+        from src.core import share_server as ss
+
+        calls = []
+
+        class FakeResp:
+            def read(self):
+                return b'{"ok": true, "db": "up"}'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def flaky(req, timeout=0):
+            calls.append(1)
+            if len(calls) == 1:
+                raise ConnectionResetError(10054, "reset")
+            return FakeResp()
+
+        # 必须显式放开闸门，否则这条用例会跟着用户当前的设置时好时坏
+        from src.core import netguard as ng
+        with mock.patch.object(ng, "is_local_only", lambda: False):
+            with mock.patch.object(urllib.request, "urlopen", flaky):
+                with mock.patch.object(ss.time, "sleep", lambda *_: None):
+                    srv = ss.ShareServer("https://x.example", "s")
+                    ok, data = srv.health()
+        self.assertTrue(ok, data)
+        self.assertEqual(len(calls), 2, "应当重试一次")
+
+
 class TestNetGuard(unittest.TestCase):
     """本地模式是默认状态，也是最容易被后续改动破坏的一处。"""
 

@@ -20,6 +20,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -30,6 +31,32 @@ UA = "qx-album/1.0 (+desktop client)"
 # 之前统一 20 秒且都在 UI 线程跑，地址填错时窗口会假死半分钟。
 TIMEOUT = 10
 TIMEOUT_LIGHT = 5
+
+
+#: 值得重试一次的底层异常。网络抖动、代理重置、短暂超时都属于这一类：
+#: 用户并没有做错什么，单次失败就报「连接失败」是误导。
+_TRANSIENT = (ConnectionResetError, ConnectionAbortedError, TimeoutError,
+              socket.timeout)
+
+
+def explain(exc: BaseException) -> str:
+    """把底层网络异常翻成一句可执行的话。
+
+    原始错误码保留在末尾：出问题时要靠它定位，不能只给一句人话。
+    """
+    raw = f"{type(exc).__name__}: {exc}"
+    low = raw.lower()
+    if isinstance(exc, _TRANSIENT) or "10054" in raw or "10053" in raw:
+        return f"连接被中途中断（网络或代理抖动），已重试仍失败：{raw}"
+    if "getaddrinfo failed" in low or "name or service not known" in low:
+        return f"域名解析失败，请检查服务端地址：{raw}"
+    if "1010" in raw:
+        return "请求被 Cloudflare 拒绝（缺少 User-Agent），请升级客户端"
+    if "certificate" in low or "ssl" in low:
+        return f"证书校验失败，可能被代理拦截：{raw}"
+    if "refused" in low:
+        return f"服务端拒绝连接，端口可能不对：{raw}"
+    return raw
 
 
 def _sign(secret: str, method: str, target: str, body: bytes, nonce: str) -> dict:
@@ -114,7 +141,8 @@ class ShareServer:
                 msg = raw[:200].decode("utf-8", "replace") or str(exc.code)
             return False, f"HTTP {exc.code}: {msg}"
         except Exception as exc:
-            return False, f"{type(exc).__name__}: {exc}"
+            # 与 health() 用同一套翻译：其它接口遇到抖动时也该给出可读的话
+            return False, explain(exc)
 
     # ---------- 健康检查 ----------
     def health(self, timeout: float = TIMEOUT_LIGHT):
@@ -125,13 +153,22 @@ class ShareServer:
             netguard.require("server", self.base)
         except netguard.OfflineError as exc:
             return False, str(exc)
-        try:
-            req = urllib.request.Request(
-                self.base + "/health", headers={"User-Agent": UA}, method="GET")
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return True, json.loads(resp.read())
-        except Exception as exc:
-            return False, f"{type(exc).__name__}: {exc}"
+        # 瞬态失败重试一次：实测 URL 完全正常时也会偶发 10054，
+        # 单次失败就报错会让人以为服务端坏了。
+        last: Exception | None = None
+        for attempt in range(2):
+            try:
+                req = urllib.request.Request(
+                    self.base + "/health", headers={"User-Agent": UA}, method="GET")
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    return True, json.loads(resp.read())
+            except _TRANSIENT as exc:
+                last = exc
+                if attempt == 0:
+                    time.sleep(0.4)
+            except Exception as exc:
+                return False, explain(exc)
+        return False, explain(last)
 
     # ---------- 短链 ----------
     def create_share(self, oss_key: str, note: str = "", expires_at: int | None = None):
