@@ -277,6 +277,9 @@ class TestNetGuard(unittest.TestCase):
                 from src.core.share_server import ShareServer
                 srv = ShareServer("https://img.example.com", "secret")
                 ok, msg = srv.list_shares(limit=1)
+                ok_h, msg_h = srv.health()
+                self.assertFalse(ok_h, "health 也必须被拦")
+                self.assertIn("本地模式", msg_h)
                 from src.core.updater import check_latest
                 info, err = check_latest()
         self.assertFalse(ok)

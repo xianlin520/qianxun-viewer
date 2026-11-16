@@ -118,6 +118,13 @@ class ShareServer:
 
     # ---------- 健康检查 ----------
     def health(self, timeout: float = TIMEOUT_LIGHT):
+        # 这里也要过闸门：/health 虽然是公开只读接口，但它同样是一个出网请求，
+        # 「测试服务端连接」会直接走到这里。
+        from . import netguard
+        try:
+            netguard.require("server", self.base)
+        except netguard.OfflineError as exc:
+            return False, str(exc)
         try:
             req = urllib.request.Request(
                 self.base + "/health", headers={"User-Agent": UA}, method="GET")
