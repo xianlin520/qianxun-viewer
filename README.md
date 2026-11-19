@@ -98,10 +98,16 @@ python -m venv .venv
 
 ## 打包发行
 
-```powershell
-build.bat          # onefile 单文件：dist\QianXunViewer.exe（首次启动略慢属正常）
-build-onedir.bat   # onedir 目录版：dist\QianXunViewer\QianXunViewer.exe（启动更快）
+```bash
+bash scripts/pack.sh    # 一次出两个产物：单文件版 + 目录版，并同步 dist/QianXunViewer.exe
 ```
+
+```powershell
+build.bat          # 只用 onefile 单文件：dist\QianXunViewer.exe（首次启动略慢属正常）
+build-onedir.bat   # 只用 onedir 目录版：dist\QianXunViewer\QianXunViewer.exe（启动更快）
+```
+
+`scripts/pack.sh` 自己定位项目根，项目换位置不用改脚本。
 
 打包产物在 `dist/`，可直接拷贝到无 Python 环境的 Windows 机器运行。发行版以 Git 标签（如 `v1.2.1`）管理。
 
@@ -125,6 +131,9 @@ qianxun-viewer/
 ├── requirements.txt        # 运行/打包依赖
 ├── build.bat               # onefile 打包脚本
 ├── build-onedir.bat        # onedir 打包脚本
+├── scripts/                # pack.sh 双产物打包 / check_version.py 版本一致性
+├── tests/                  # test_pure.py 纯逻辑 / smoke_app.py 窗口冒烟
+├── server/                 # Cloudflare Workers 分享服务端
 ├── assets/                 # logo.png / icon.ico
 ├── docs/                   # 用户指南 / 架构 / 变更日志 / 截图
 └── src/
@@ -152,7 +161,15 @@ qianxun-viewer/
 
 ## 测试
 
-开发期通过离屏（`QT_QPA_PLATFORM=offscreen`）冒烟脚本验证：真实大目录与云盘目录扫描、缩略图缓存、排序、分页、图片墙无缝布局与末行不拉伸、卡片按钮、最爱持久化、移出/还原、重复检测与链式抑制、长宽比筛选、大图解码、退出无残留等。测试脚本为临时文件，不随仓库分发。
+两层，都随仓库分发，都在离屏模式下跑，不需要真窗口也不需要联网：
+
+```bash
+./.venv/Scripts/python.exe -m unittest discover -s tests   # 纯逻辑 47 条
+./.venv/Scripts/python.exe tests/smoke_app.py              # 需要 QApplication 的窗口与信号 10 项
+cd server && node --test tests/boundary.test.js            # 服务端 38 条
+```
+
+`tests/test_pure.py` 测查重索引、收藏路径换算、设置项描述符、出网闸门、错误翻译、哈希键、游标契约等不依赖 QWidget 的部分。`tests/smoke_app.py` 构造主窗体、大图、分页、查重面板、设置与分享记录，走一遍关键交互，设置项用独立应用名隔离，不会碰用户真实配置。
 
 ## 分享服务端（可选）
 

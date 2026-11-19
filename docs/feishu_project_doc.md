@@ -4,7 +4,7 @@
 
 Windows 桌面图片查看器 · 版本 v1.7.2 · 免安装
 
-![图片](E:\QoderWork\qianxun-viewer\docs\screenshots\feishu_1_doxcnw.png)
+![图片](E:\AiAgentWork\QianxunWork\qianxun-viewer\docs\screenshots\feishu_1_doxcnw.png)
 
 图片墙：千张图无缝拼接，末行不拉伸
 
@@ -30,7 +30,7 @@ Windows 桌面图片查看器 · 版本 v1.7.2 · 免安装
 
 图片墙是默认视图。不同长宽比的图拼成整行，中间没有空洞。最后一行保持自然大小，不会为了填满把某张图撑成整屏。
 
-![图片](E:\QoderWork\qianxun-viewer\docs\screenshots\feishu_2_doxcna.png)
+![图片](E:\AiAgentWork\QianxunWork\qianxun-viewer\docs\screenshots\feishu_2_doxcna.png)
 
 大图浏览器：512 缓存先显示，原图后台无缝替换
 
@@ -47,7 +47,7 @@ Windows 桌面图片查看器 · 版本 v1.7.2 · 免安装
 
 ## 找图
 
-![图片](E:\QoderWork\qianxun-viewer\docs\screenshots\feishu_3_doxcn8.png)
+![图片](E:\AiAgentWork\QianxunWork\qianxun-viewer\docs\screenshots\feishu_3_doxcn8.png)
 
 重复检测：改过尺寸、换过格式的图也能认出来
 
@@ -91,7 +91,7 @@ Windows 桌面图片查看器 · 版本 v1.7.2 · 免安装
 
 ## 云端
 
-![图片](E:\QoderWork\qianxun-viewer\docs\screenshots\feishu_4_doxcno.png)
+![图片](E:\AiAgentWork\QianxunWork\qianxun-viewer\docs\screenshots\feishu_4_doxcno.png)
 
 在线库：整桶列举，缩略图走 OSS 图片处理
 

@@ -26,13 +26,13 @@
 ## 二、本地位置
 
 ```
-E:\QoderWork\qianxun-viewer
+E:\AiAgentWork\QianxunWork\qianxun-viewer
 ```
 
 虚拟环境：
 
 ```
-E:\QoderWork\qianxun-viewer\.venv\Scripts\python.exe
+E:\AiAgentWork\QianxunWork\qianxun-viewer\.venv\Scripts\python.exe
 ```
 
 已装 PySide6 6.11.2、Pillow 12.3.0、numpy 2.5.2、oss2 2.19.1。直接用这个解释器，不要新建环境。
@@ -260,7 +260,7 @@ node --check src/index.js
 
 ```powershell
 $env:QT_QPA_PLATFORM='offscreen'
-.\.venv\Scripts\python.exe -c "import sys;sys.path.insert(0,r'E:\QoderWork\qianxun-viewer');from PySide6.QtWidgets import QApplication;app=QApplication([]);app.setApplicationName('QianXunViewer');app.setOrganizationName('QianXun');from src.ui.main_window import MainWindow;w=MainWindow();w.show();app.processEvents();print('OK');w.close()"
+.\.venv\Scripts\python.exe -c "import sys;sys.path.insert(0,r'E:\AiAgentWork\QianxunWork\qianxun-viewer');from PySide6.QtWidgets import QApplication;app=QApplication([]);app.setApplicationName('QianXunViewer');app.setOrganizationName('QianXun');from src.ui.main_window import MainWindow;w=MainWindow();w.show();app.processEvents();print('OK');w.close()"
 ```
 
 **版本一致性**

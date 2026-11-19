@@ -3,6 +3,33 @@
 本文件记录千寻影集（QianXun Album）的重要变更。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)，版本号遵循语义化版本。
 
+## [未发布] 项目迁移
+
+仓库从 `E:\QoderWork\qianxun-viewer` 迁到 `E:\AiAgentWork\QianxunWork\qianxun-viewer`。
+代码本身没动，改的是路径与开发工具。
+
+### 路径
+
+- 虚拟环境在新位置重建（原来的 `.venv` 里 `pip.exe`、`pyinstaller.exe`、
+  `activate.bat` 都把旧路径烧进了启动器，挪过去会指向不存在的解释器）。
+  依赖按 `requirements.lock` 装回，31 个包，版本一致。
+- `.idea` 的 SDK 名与最近打开路径、`docs/REVIEW_HANDOFF.md`、
+  `docs/feishu_project_doc.md` 内的图片路径一并改成新位置。
+- `build/` 是 PyInstaller 的中间产物，里面全是旧路径，已清空，下次打包自动重建。
+
+### 工具
+
+- `scripts/pack.sh`：原来只存在于临时目录的打包脚本收进仓库，自己定位项目根，
+  一次出单文件版与目录版，最后同步 `dist/QianXunViewer.exe`。项目再换位置不用改它。
+- `tests/smoke_app.py`：冒烟测试收进仓库，去掉写死的项目路径，
+  设置项改用独立应用名隔离。原来靠改 `APPDATA` 环境变量隔离是无效的，
+  因为 Qt 的 `QSettings` 走 Windows 已知文件夹。
+
+### 验证
+
+迁移后在新位置跑：客户端 47 条、服务端 38 条、窗口冒烟 10 项全过，
+版本一致性 1.7.2，新路径 exe 离屏启动存活、退出后出网日志无新增。
+
 ## [1.7.2] - 2026-11-16
 
 ### 修复
